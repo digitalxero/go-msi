@@ -149,15 +149,24 @@ func (t *msiTransform) summaryInfo() msiSummaryInfo {
 		CreatingApp:    "go-msix",
 		CreateTime:     msiBuildTime,
 		SaveTime:       msiBuildTime,
-		// Transform flags live in PID16 (CharacterCount): low word = validation
-		// flags (Wine/Windows skip a transform whose validation isn't satisfied),
-		// high word = error-condition suppression. PID14 is not used by transforms.
-		OmitPageCount:  true,
+		// PID14 PageCount carries the transform's required Windows Installer
+		// schema version. It MUST be present: msiexec rejects a transform whose
+		// summary has no version with error 2758 ("Transform doesn't contain an
+		// MSI version"), making a patch's transform invalid / not applicable.
+		PageCount: msiSchemaVersion,
+		// Transform validation/error flags live in PID16 (CharacterCount): low
+		// word = validation flags (Wine/Windows skip a transform whose validation
+		// is not satisfied), high word = error-condition suppression.
 		CharacterCount: transformCharacterCount(t.validation),
 		WordCount:      0,
 		Security:       2,
 	}
 }
+
+// msiSchemaVersion is the Windows Installer schema version written to the
+// SummaryInformation PageCount (PID14) of databases and transforms (200 = the
+// baseline schema, broadly compatible).
+const msiSchemaVersion = 200
 
 // msiTransformErrorSuppress suppresses the benign apply-time errors a generated
 // transform can raise (add/del existing/missing rows and tables) so msiexec
