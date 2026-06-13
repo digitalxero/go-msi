@@ -146,17 +146,22 @@ func (t *msiTransform) summaryInfo() msiSummaryInfo {
 		Author:         t.target.manufacturer,
 		Template:       msiTemplateString(t.target),
 		RevisionNumber: lineage,
-		CreatingApp:    "go-msix",
-		CreateTime:     msiBuildTime,
-		SaveTime:       msiBuildTime,
+		// PID8 (Last Saved By): Windows' patch sequencer requires "last author
+		// info" on every transform it sequences (error 1648 / "last author info
+		// property is missing from transform" otherwise). Carry the same product
+		// lineage so the sequencer has the target product/version data.
+		LastSavedBy: lineage,
+		CreatingApp: "go-msix",
+		CreateTime:  msiBuildTime,
+		SaveTime:    msiBuildTime,
 		// PID14 PageCount carries the transform's required Windows Installer
 		// schema version. It MUST be present: msiexec rejects a transform whose
 		// summary has no version with error 2758 ("Transform doesn't contain an
 		// MSI version"), making a patch's transform invalid / not applicable.
 		PageCount: msiSchemaVersion,
-		// Transform validation/error flags live in PID16 (CharacterCount): low
-		// word = validation flags (Wine/Windows skip a transform whose validation
-		// is not satisfied), high word = error-condition suppression.
+		// Transform validation/error flags live in PID16 (CharacterCount). Per
+		// MSDN the UPPER word holds the validation flags and the LOWER word the
+		// error-condition flags.
 		CharacterCount: transformCharacterCount(t.validation),
 		WordCount:      0,
 		Security:       2,
@@ -168,16 +173,15 @@ func (t *msiTransform) summaryInfo() msiSummaryInfo {
 // baseline schema, broadly compatible).
 const msiSchemaVersion = 200
 
-// msiTransformErrorSuppress suppresses the benign apply-time errors a generated
-// transform can raise (add/del existing/missing rows and tables) so msiexec
-// applies it cleanly: ADDEXISTINGROW|DELMISSINGROW|ADDEXISTINGTABLE|
-// DELMISSINGTABLE|UPDATEMISSINGROW.
-const msiTransformErrorSuppress = 0x1F
-
-// transformCharacterCount packs the PID16 word: high 16 bits error-suppression
-// flags, low 16 bits the validation flags.
+// transformCharacterCount packs the PID16 CharacterCount word. Per MSDN
+// (Character Count Summary): the UPPER 16 bits hold the transform validation
+// flags and the LOWER 16 bits hold the error-condition flags. We keep the error
+// word zero: the generated transforms apply cleanly (no add/del of existing/
+// missing rows or tables), and a non-zero low word would be misread as
+// validation flags by Wine (which reads validation from the low word), breaking
+// the local Wine smoke. Windows validates via the high word.
 func transformCharacterCount(v TransformValidation) int {
-	return (msiTransformErrorSuppress << 16) | (int(v) & 0xffff)
+	return (int(v) & 0xffff) << 16
 }
 
 // buildMSITransformStreams diffs base→target and serializes the transform CFB
