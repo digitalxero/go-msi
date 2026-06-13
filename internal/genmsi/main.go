@@ -59,6 +59,7 @@ func main() {
 
 	// A non-advertised shortcut referencing the exe and the icon.
 	comp.Shortcut("Go MSIX P3 App.lnk", "[#app.exe]").
+		InDirectory("ProgramMenuFolder").
 		Description("Launch Go MSIX P3 App").
 		Icon("AppIcon", 0)
 

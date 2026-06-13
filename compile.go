@@ -108,6 +108,16 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 	// name for the install dir DefaultDir, which then gets short|long treatment).
 	ensureRootDirectories(p, "INSTALLFOLDER", msiSanitizeDirName(p.productName))
 
+	// Ensure any directory referenced by a shortcut exists before the Directory
+	// table is emitted. Standard Windows Installer directories (ProgramMenuFolder,
+	// DesktopFolder, …) are created on demand under TARGETDIR so shortcuts can be
+	// placed in them without the caller declaring them.
+	for _, e := range p.shortcutEntries {
+		if e.directory != "" {
+			ensureStandardDirectory(p, e.directory)
+		}
+	}
+
 	db := newMSIDatabaseBuilder()
 
 	// P4: expand a configured MajorUpgrade into Upgrade/LaunchCondition entries
@@ -208,6 +218,11 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			// (no short|long applied); only the product-derived install
 			// folder goes through the dir namer.
 			ddColumn = "SourceDir"
+		} else if dd == "." {
+			// Standard Windows Installer directories (ProgramMenuFolder,
+			// DesktopFolder, …) use the literal "." DefaultDir; it must not go
+			// through the 8.3 shortname generator.
+			ddColumn = "."
 		} else {
 			namer := dirNamers[id]
 			if namer == nil {
@@ -393,8 +408,12 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 				iconName = e.iconName
 				iconIndex = e.iconIndex
 			}
+			dir := e.directory
+			if dir == "" {
+				dir = "INSTALLFOLDER"
+			}
 			row := newMSIRowBuilder().WithColumns(scTbl.columns()...).
-				WithValues(scID, "INSTALLFOLDER", e.name, e.component, target, e.arguments, e.description, nil, iconName, iconIndex, int16(1), "").Build()
+				WithValues(scID, dir, e.name, e.component, target, e.arguments, e.description, nil, iconName, iconIndex, int16(1), "").Build()
 			if err := scTbl.addRow(row); err != nil {
 				return nil, fmt.Errorf("msi compile: Shortcut row %s: %w", scID, err)
 			}
@@ -518,6 +537,43 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 	// Finalize (adds core required tables, _Validation for present tables,
 	// system catalog, and runs internal validate()).
 	return db.Build()
+}
+
+// msiStandardDirectories are the predefined Windows Installer directory
+// identifiers that resolve to well-known locations at install time. They live
+// directly under TARGETDIR with a DefaultDir of "." (the installer substitutes
+// the real path). They are created on demand when referenced (e.g. by a
+// shortcut's InDirectory) so callers need not declare them.
+var msiStandardDirectories = map[string]bool{
+	"ProgramMenuFolder": true, "StartMenuFolder": true, "StartupFolder": true,
+	"DesktopFolder": true, "FavoritesFolder": true, "SendToFolder": true,
+	"AppDataFolder": true, "LocalAppDataFolder": true, "CommonAppDataFolder": true,
+	"PersonalFolder": true, "TemplateFolder": true, "NetHoodFolder": true,
+	"PrintHoodFolder": true, "RecentFolder": true, "AdminToolsFolder": true,
+	"ProgramFilesFolder": true, "ProgramFiles64Folder": true,
+	"CommonFilesFolder": true, "CommonFiles64Folder": true,
+	"WindowsFolder": true, "SystemFolder": true, "System64Folder": true,
+	"System16Folder": true, "FontsFolder": true, "TempFolder": true,
+	"WindowsVolume": true,
+}
+
+// ensureStandardDirectory adds a referenced directory to the model if it is not
+// already declared and is a recognized standard Windows Installer directory
+// (rooted at TARGETDIR, DefaultDir "."). Non-standard, undeclared directories
+// are left alone so the FK/category ICEs surface the authoring mistake.
+func ensureStandardDirectory(p *msiPackage, dirID string) {
+	if p == nil || dirID == "" {
+		return
+	}
+	if _, ok := p.dirEntries[dirID]; ok {
+		return
+	}
+	if msiStandardDirectories[dirID] {
+		if _, ok := p.dirEntries["TARGETDIR"]; !ok {
+			p.dirEntries["TARGETDIR"] = &dirEntry{id: "TARGETDIR", defaultDir: "SourceDir"}
+		}
+		p.dirEntries[dirID] = &dirEntry{id: dirID, parent: "TARGETDIR", defaultDir: "."}
+	}
 }
 
 // ensureRootDirectories guarantees the conventional TARGETDIR and a primary

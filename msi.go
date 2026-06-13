@@ -249,6 +249,13 @@ type RegistryKeyBuilder interface {
 
 // ShortcutBuilder for P3 shortcuts (advertised vs non, icon refs, etc.).
 type ShortcutBuilder interface {
+	// InDirectory sets the directory the shortcut is created in (the
+	// Shortcut.Directory_ column). It may be a directory declared via
+	// RootDirectory/Directory or a standard Windows Installer directory such as
+	// "ProgramMenuFolder", "DesktopFolder", "StartupFolder" or
+	// "StartMenuFolder" — standard directories are added to the Directory table
+	// automatically. When unset, the shortcut is created in INSTALLFOLDER.
+	InDirectory(dirID string) ShortcutBuilder
 	Arguments(args string) ShortcutBuilder
 	Description(desc string) ShortcutBuilder
 	Icon(name string, index int16) ShortcutBuilder
@@ -376,6 +383,7 @@ type registryEntry struct {
 
 type shortcutEntry struct {
 	name, target, component string
+	directory               string // Shortcut.Directory_; defaults to INSTALLFOLDER
 	arguments, description  string
 	iconName                string
 	iconIndex               int16
@@ -880,6 +888,11 @@ func (h *registryKeyHandle) AsKeyPath() RegistryKeyBuilder {
 type shortcutHandle struct {
 	pkg *msiPackage
 	idx int
+}
+
+func (h *shortcutHandle) InDirectory(dirID string) ShortcutBuilder {
+	h.pkg.shortcutEntries[h.idx].directory = dirID
+	return h
 }
 
 func (h *shortcutHandle) Arguments(args string) ShortcutBuilder {

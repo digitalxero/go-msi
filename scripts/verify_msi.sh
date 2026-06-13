@@ -58,6 +58,10 @@ grep -q '1.2.3' "$WORK/dump_p3/Registry.idt" || fail "Registry Version value mis
 [ "$(grep -c . "$WORK/dump_p3/Shortcut.idt")" -gt 3 ] || fail "Shortcut table is empty (regression)"
 grep -q 'Go MSIX P3 App.lnk' "$WORK/dump_p3/Shortcut.idt" || fail "Shortcut row missing"
 grep -q 'AppIcon' "$WORK/dump_p3/Shortcut.idt" || fail "Shortcut Icon_ ref missing"
+# Shortcut must be placed in ProgramMenuFolder (InDirectory), not INSTALLFOLDER,
+# and that standard directory must be present in the Directory table.
+grep -qP '\tProgramMenuFolder\t' "$WORK/dump_p3/Shortcut.idt" || fail "Shortcut not placed in ProgramMenuFolder"
+grep -qP '^ProgramMenuFolder\tTARGETDIR\t' "$WORK/dump_p3/Directory.idt" || fail "ProgramMenuFolder not in Directory table"
 
 # Icon side stream must extract to non-empty bytes (binary column round-trips).
 RUN sh -c 'msiinfo extract p3.msi Icon.AppIcon > AppIcon.out'
