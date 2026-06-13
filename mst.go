@@ -146,11 +146,12 @@ func (t *msiTransform) summaryInfo() msiSummaryInfo {
 		Author:         t.target.manufacturer,
 		Template:       msiTemplateString(t.target),
 		RevisionNumber: lineage,
-		// PID8 (Last Saved By): Windows' patch sequencer requires "last author
-		// info" on every transform it sequences (error 1648 / "last author info
-		// property is missing from transform" otherwise). Carry the same product
-		// lineage so the sequencer has the target product/version data.
-		LastSavedBy: lineage,
+		// PID8 (Last Saved By): for a transform this is the platform and language
+		// the database should have AFTER the transform is applied (i.e. the new
+		// Template). Windows' patch sequencer requires it ("last author info
+		// property is missing from transform" / error 1648 otherwise). The patch
+		// transforms do not change platform/language, so it equals the Template.
+		LastSavedBy: msiTemplateString(t.target),
 		CreatingApp: "go-msix",
 		CreateTime:  msiBuildTime,
 		SaveTime:    msiBuildTime,
