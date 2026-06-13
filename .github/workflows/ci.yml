@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Unit tests (race)
+        run: go test -race -count=1 ./...
+      - name: Install MSI verification tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends msitools cabextract osslsigncode
+      - name: Cross-check MSI/MSP against msitools + cabextract + osslsigncode
+        run: ./scripts/verify_msi.sh
+
+  windows-patch:
+    # Real Windows Installer applies the generated .msp: install the base MSI,
+    # apply the patch, assert the patched + new files on disk.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Generate base.msi, upgraded.msi, patch.msp
+        run: go run ./internal/genpatch ${{ runner.temp }}
+      - name: Install base, apply patch, verify (real msiexec)
+        shell: pwsh
+        run: |
+          $d = "${{ runner.temp }}"
+          $target = "C:\go-msi-test"
+          function Run-Msi($a) {
+            $p = Start-Process msiexec -ArgumentList $a -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "msiexec $a failed with exit code $($p.ExitCode)" }
+          }
+          Run-Msi "/i `"$d\base.msi`" /qn TARGETDIR=`"$target`" /l*v `"$d\install.log`""
+          $a = Get-ChildItem -Recurse $target -Filter a.exe | Select-Object -First 1
+          if (-not $a) { throw "base install did not place a.exe" }
+          if ((Get-Content $a.FullName -Raw) -notmatch "ORIGINAL") { throw "base a.exe content unexpected" }
+          Run-Msi "/p `"$d\patch.msp`" /qn /l*v `"$d\patch.log`""
+          if ((Get-Content $a.FullName -Raw) -notmatch "PATCHED") { throw "a.exe was not patched" }
+          $c = Get-ChildItem -Recurse $target -Filter c.dat | Select-Object -First 1
+          if (-not $c) { throw "patch did not add c.dat" }
+          Write-Host "patch applied: a.exe updated, c.dat added"
+      - name: Upload msiexec logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msiexec-logs
+          path: ${{ runner.temp }}/*.log

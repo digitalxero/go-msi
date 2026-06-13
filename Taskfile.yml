@@ -1,0 +1,57 @@
+# https://taskfile.dev/
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task: test
+
+  test:
+    desc: Run all tests with the race detector
+    cmds:
+      - go test -race -count=1 ./...
+
+  build:
+    desc: Build the package and generators
+    cmds:
+      - go build ./...
+
+  tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
+  lint:
+    desc: vet + gofmt check
+    cmds:
+      - go vet ./...
+      - test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+  verify-msi:
+    desc: Cross-check generated MSI/MSP against msitools + cabextract + osslsigncode (native or docker)
+    cmds:
+      - ./scripts/verify_msi.sh
+
+  smoke-wine:
+    desc: Install/uninstall a generated MSI with Wine msiexec (docker)
+    cmds:
+      - ./scripts/install_smoke_wine.sh
+
+  patch-smoke-wine:
+    desc: Install the base MSI then apply the .msp patch with Wine msiexec (docker)
+    cmds:
+      - ./scripts/patch_smoke_wine.sh
+
+  gen-sample:
+    desc: Generate the comprehensive sample MSI
+    cmds:
+      - go run ./internal/genmsi {{.CLI_ARGS | default "out.msi"}}
+
+  verify:
+    desc: Full local verification (tidy + test + build + lint + external cross-check)
+    cmds:
+      - task: tidy
+      - task: test
+      - task: build
+      - task: lint
+      - task: verify-msi
