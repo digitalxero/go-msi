@@ -136,10 +136,13 @@ func (p *msiPatch) buildPatchProductTransform() ([]msiStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	// validation 0: the patch's own PID7 product gate already restricts which
-	// product the patch applies to, so the transform applies unconditionally
-	// once that gate passes (and the PID16 error flags suppress benign errors).
-	summary := (&msiTransform{base: p.base, target: p.upgraded, validation: 0}).summaryInfo()
+	// VALIDATE_PRODUCT binds the patch to the target product: real Windows
+	// msiexec needs a transform to validate the ProductCode (against the
+	// transform's PID9 lineage) to consider the patch applicable to the
+	// installed product — without it, it returns 1642 (ERROR_PATCH_TARGET_NOT_
+	// FOUND). The PID16 error flags still suppress benign add/del errors, and
+	// Wine accepts PRODUCT (it is in its supported-flags set).
+	summary := (&msiTransform{base: p.base, target: p.upgraded, validation: TransformValidateProduct}).summaryInfo()
 	return buildPatchTransformStreams(p.baseDB, target, summary)
 }
 
@@ -220,7 +223,7 @@ func (p *msiPatch) buildPatchMetadataTransform() ([]msiStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	summary := (&msiTransform{base: p.base, target: p.upgraded, validation: 0}).summaryInfo()
+	summary := (&msiTransform{base: p.base, target: p.upgraded, validation: TransformValidateProduct}).summaryInfo()
 	return buildPatchTransformStreams(p.baseDB, target, summary)
 }
 
