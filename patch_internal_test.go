@@ -98,12 +98,13 @@ func TestPatch_FileDiff(t *testing.T) {
 	assert.True(t, sawChangedAExe, "changed a.exe present")
 	assert.True(t, sawNewCDat, "new c.dat present")
 
-	// Patch sequences are appended above the base's highest File.Sequence (2),
-	// and the reserved patch DiskId is above the base's highest (1).
+	// Patch sequences and DiskId land in the ranges Windows reserves for
+	// patch-inserted rows (Sequence >= 10000, DiskId >= 100), and above the
+	// base's own maxima.
 	for _, ch := range mp.changes {
-		assert.Greater(t, ch.sequence, int16(2), "patch sequence appended above base max")
+		assert.GreaterOrEqual(t, ch.sequence, msiPatchMinSequence, "patch sequence in the reserved patch range")
 	}
-	assert.Equal(t, int16(2), mp.patchDiskID, "reserved patch DiskId is base max + 1")
+	assert.Equal(t, msiPatchMinDiskID, mp.patchDiskID, "reserved patch DiskId floor")
 }
 
 func TestPatch_Cab(t *testing.T) {

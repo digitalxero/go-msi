@@ -433,9 +433,17 @@ func (p *msiPatch) computeFileChanges() error {
 		}
 	}
 
-	// Assign patch sequence numbers above the base's highest File.Sequence and
-	// reserve a Media DiskId above the base's highest.
+	// Assign patch sequence numbers and a Media DiskId in the ranges Windows
+	// reserves for patch-inserted rows. The Windows patch sequencer expects a
+	// patch transform to insert Media.DiskId >= msiPatchMinDiskID (100) and
+	// File/Patch.Sequence >= msiPatchMinSequence (10000) so they do not collide
+	// with the base product's media/sequence space; values below these reserved
+	// floors are not recognized as patch-inserted. We also keep them above the
+	// base's own maxima for safety.
 	nextSeq := maxFileSequence(p.baseDB) + 1
+	if nextSeq < msiPatchMinSequence {
+		nextSeq = msiPatchMinSequence
+	}
 	for i := range p.changes {
 		if nextSeq > 32767 {
 			return fmt.Errorf("msi patch: patched file sequence exceeds the 32767 i2 ceiling")
@@ -444,8 +452,19 @@ func (p *msiPatch) computeFileChanges() error {
 		nextSeq++
 	}
 	p.patchDiskID = maxMediaDiskID(p.baseDB) + 1
+	if p.patchDiskID < msiPatchMinDiskID {
+		p.patchDiskID = msiPatchMinDiskID
+	}
 	return nil
 }
+
+// msiPatchMinSequence and msiPatchMinDiskID are the floors Windows reserves for
+// rows inserted by a patch transform (File/Patch.Sequence and Media.DiskId
+// respectively). See computeFileChanges.
+const (
+	msiPatchMinSequence int16 = 10000
+	msiPatchMinDiskID   int16 = 100
+)
 
 // patchCabMembers returns the cabinet members for the staged changes, in patch
 // sequence order (cabinet order must match Patch.Sequence).

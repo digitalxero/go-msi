@@ -142,7 +142,7 @@ func (p *msiPatch) buildPatchProductTransform() ([]msiStream, error) {
 	// installed product — without it, it returns 1642 (ERROR_PATCH_TARGET_NOT_
 	// FOUND). The PID16 error flags still suppress benign add/del errors, and
 	// Wine accepts PRODUCT (it is in its supported-flags set).
-	summary := (&msiTransform{base: p.base, target: p.upgraded, validation: TransformValidateProduct}).summaryInfo()
+	summary := (&msiTransform{base: p.base, target: p.upgraded, validation: TransformValidateProduct, errorConditions: patchTransformErrorSuppress}).summaryInfo()
 	return buildPatchTransformStreams(p.baseDB, target, summary)
 }
 
@@ -223,7 +223,7 @@ func (p *msiPatch) buildPatchMetadataTransform() ([]msiStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	summary := (&msiTransform{base: p.base, target: p.upgraded, validation: TransformValidateProduct}).summaryInfo()
+	summary := (&msiTransform{base: p.base, target: p.upgraded, validation: TransformValidateProduct, errorConditions: patchTransformErrorSuppress}).summaryInfo()
 	return buildPatchTransformStreams(p.baseDB, target, summary)
 }
 

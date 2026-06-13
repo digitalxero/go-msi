@@ -51,14 +51,34 @@ type Transform interface {
 func NewTransform() TransformBuilder { return &msiTransform{} }
 
 type msiTransform struct {
-	base, target *msiPackage
-	validation   TransformValidation
+	base, target    *msiPackage
+	validation      TransformValidation
+	errorConditions int // PID16 low word: MSITRANSFORM_ERROR_* to suppress on apply
 
 	// Populated by Build (and reused by WriteMST / the apply oracle).
 	baseDB   msiDatabase
 	targetDB msiDatabase
 	streams  []msiStream
 }
+
+// MSITRANSFORM_ERROR_* condition flags (PID16 low word) — errors the installer
+// suppresses when applying the transform.
+const (
+	msiTransformErrAddExistingRow   = 0x1
+	msiTransformErrDelMissingRow    = 0x2
+	msiTransformErrAddExistingTable = 0x4
+	msiTransformErrDelMissingTable  = 0x8
+	msiTransformErrUpdateMissingRow = 0x10
+)
+
+// patchTransformErrorSuppress are the error conditions a patch transform must
+// suppress: the installer pre-creates the Patch/PatchPackage tables (to track
+// the patch), so the metadata transform's "add existing table"/"add existing
+// row" operations must not abort. Only flags that Wine reads benignly as
+// validation bits are used (ADDEXISTINGROW->LANGUAGE, DELMISSINGROW->PRODUCT,
+// ADDEXISTINGTABLE->PLATFORM, all satisfied/ignored), so the Wine smoke still
+// applies the patch.
+const patchTransformErrorSuppress = msiTransformErrAddExistingRow | msiTransformErrDelMissingRow | msiTransformErrAddExistingTable
 
 func (t *msiTransform) From(base Package) TransformBuilder {
 	if p, ok := base.(*msiPackage); ok {
@@ -163,7 +183,7 @@ func (t *msiTransform) summaryInfo() msiSummaryInfo {
 		// Transform validation/error flags live in PID16 (CharacterCount). Per
 		// MSDN the UPPER word holds the validation flags and the LOWER word the
 		// error-condition flags.
-		CharacterCount: transformCharacterCount(t.validation),
+		CharacterCount: transformCharacterCount(t.validation, t.errorConditions),
 		WordCount:      0,
 		Security:       2,
 	}
@@ -176,13 +196,12 @@ const msiSchemaVersion = 200
 
 // transformCharacterCount packs the PID16 CharacterCount word. Per MSDN
 // (Character Count Summary): the UPPER 16 bits hold the transform validation
-// flags and the LOWER 16 bits hold the error-condition flags. We keep the error
-// word zero: the generated transforms apply cleanly (no add/del of existing/
-// missing rows or tables), and a non-zero low word would be misread as
-// validation flags by Wine (which reads validation from the low word), breaking
-// the local Wine smoke. Windows validates via the high word.
-func transformCharacterCount(v TransformValidation) int {
-	return (int(v) & 0xffff) << 16
+// flags and the LOWER 16 bits hold the error-condition flags. Note Wine reads
+// the LOWER word as the validation flags (opposite of MSDN), so error-condition
+// flags are chosen to be benign Wine validation bits (see
+// patchTransformErrorSuppress).
+func transformCharacterCount(v TransformValidation, errorConditions int) int {
+	return ((int(v) & 0xffff) << 16) | (errorConditions & 0xffff)
 }
 
 // buildMSITransformStreams diffs base→target and serializes the transform CFB
