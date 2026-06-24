@@ -61,9 +61,11 @@ type PackageBuilder interface {
 	// Deterministic walk order is used.
 	AddTree(fsys fs.FS, attachPointDirID, featureID string) error
 
-	// P3 global assets (icons/binaries referenced by shortcuts/reg etc.).
-	Icon(name string, data []byte) PackageBuilder
-	Binary(name string, data []byte) PackageBuilder
+	// P3 global assets (icons/binaries referenced by shortcuts/reg etc.). The
+	// source is streamed (re-opened, never fully buffered) when its CFB stream
+	// is written. Use FileSourceFromBytes/FromPath/FromFS to construct one.
+	Icon(name string, src FileSource) PackageBuilder
+	Binary(name string, src FileSource) PackageBuilder
 
 	// P4: a launch condition (Condition that must hold for the install to
 	// proceed, with the message shown when it fails).
@@ -206,9 +208,18 @@ type ComponentBuilder interface {
 
 	// WithFile adds a payload file belonging to this component. The logicalName
 	// is relative to the component's directory (used for File.FileName after
-	// shortname processing and for the stable file ID seed). Content is
-	// captured at call time.
-	WithFile(logicalName string, data []byte) FileBuilder
+	// shortname processing and for the stable file ID seed). The source is
+	// re-opened (never fully buffered) when the cabinet is written; its Size is
+	// read at compile time. Use FileSourceFromBytes/FromPath/FromFS/FromOpener
+	// (or WithFilePath / WithFileFromFS) to construct one.
+	WithFile(logicalName string, src FileSource) FileBuilder
+
+	// WithFilePath adds a payload file streamed from an OS path (os.Stat for
+	// size, os.Open per read). The file must remain present until WriteMSI.
+	WithFilePath(logicalName, path string) FileBuilder
+
+	// WithFileFromFS adds a payload file streamed from an fs.FS entry.
+	WithFileFromFS(logicalName string, fsys fs.FS, name string) FileBuilder
 
 	// AssociateToFeature links this component to the named feature
 	// (populates FeatureComponents). Safe to call multiple times.
@@ -366,12 +377,12 @@ type msiPackage struct {
 
 type iconEntry struct {
 	name string
-	data []byte
+	src  FileSource
 }
 
 type binaryEntry struct {
 	name string
-	data []byte
+	src  FileSource
 }
 
 type registryEntry struct {
@@ -422,7 +433,7 @@ type featEntry struct {
 
 type attachedFile struct {
 	name    string
-	data    []byte
+	src     FileSource
 	version string
 }
 
@@ -495,13 +506,13 @@ func (p *msiPackage) WithSkipValidation() PackageBuilder {
 	return p
 }
 
-func (p *msiPackage) Icon(name string, data []byte) PackageBuilder {
-	p.iconEntries = append(p.iconEntries, iconEntry{name: name, data: append([]byte(nil), data...)})
+func (p *msiPackage) Icon(name string, src FileSource) PackageBuilder {
+	p.iconEntries = append(p.iconEntries, iconEntry{name: name, src: src})
 	return p
 }
 
-func (p *msiPackage) Binary(name string, data []byte) PackageBuilder {
-	p.binaryEntries = append(p.binaryEntries, binaryEntry{name: name, data: append([]byte(nil), data...)})
+func (p *msiPackage) Binary(name string, src FileSource) PackageBuilder {
+	p.binaryEntries = append(p.binaryEntries, binaryEntry{name: name, src: src})
 	return p
 }
 
@@ -553,7 +564,9 @@ func (p *msiPackage) AddTree(fsys fs.FS, attachPointDirID, featureID string) err
 		if !we.d.Type().IsRegular() {
 			continue
 		}
-		data, err := fs.ReadFile(fsys, we.path)
+		// Stream the file lazily: fs.Stat for the size now, fs.Open per read at
+		// cab-write time — the bytes are never fully buffered here.
+		src, err := FileSourceFromFS(fsys, we.path)
 		if err != nil {
 			p.fail(fmt.Errorf("reading %s: %w", we.path, err))
 			continue
@@ -572,7 +585,7 @@ func (p *msiPackage) AddTree(fsys fs.FS, attachPointDirID, featureID string) err
 		if featureID != "" {
 			comp = comp.AssociateToFeature(featureID)
 		}
-		comp.WithFile(base, data)
+		comp.WithFile(base, src)
 	}
 	return nil
 }
@@ -727,6 +740,18 @@ func (p *msiPackage) WriteMSI(w io.Writer) error {
 	// + the (recursive) CLSIDs. The signature stream is excluded from the imprint,
 	// so an unsigned build stays byte-identical.
 	if p.signer != nil {
+		// The imprint hash and the CFB write each consume every streamed cabinet
+		// once; materialize those to per-cabinet temps first so a signed build
+		// compresses each cabinet only once (re-reading the temp twice) instead
+		// of recompressing it for both passes. Unsigned builds skip this and
+		// stream each cabinet straight through (single pass).
+		var cleanup func()
+		streams, cleanup, err = realizeStreamedCabStreams(streams)
+		if err != nil {
+			return fmt.Errorf("msi: staging cabinets for signing: %w", err)
+		}
+		defer cleanup()
+
 		streams, err = msiSignStreams(streams, subStorages, p.signer)
 		if err != nil {
 			return fmt.Errorf("msi: signing: %w", err)
@@ -812,13 +837,31 @@ func (c *compHandle) WithAttributes(attrs int16) ComponentBuilder {
 	return c
 }
 
-func (c *compHandle) WithFile(logicalName string, data []byte) FileBuilder {
+func (c *compHandle) WithFile(logicalName string, src FileSource) FileBuilder {
 	e := c.pkg.compEntries[c.id]
 	if e == nil {
 		return &fileHandle{} // defensive; normal path always has entry
 	}
-	e.files = append(e.files, attachedFile{name: logicalName, data: append([]byte(nil), data...)})
+	e.files = append(e.files, attachedFile{name: logicalName, src: src})
 	return &fileHandle{pkg: c.pkg, compID: c.id, name: logicalName}
+}
+
+func (c *compHandle) WithFilePath(logicalName, path string) FileBuilder {
+	src, err := FileSourceFromPath(path)
+	if err != nil {
+		c.pkg.fail(err)
+		return &fileHandle{}
+	}
+	return c.WithFile(logicalName, src)
+}
+
+func (c *compHandle) WithFileFromFS(logicalName string, fsys fs.FS, name string) FileBuilder {
+	src, err := FileSourceFromFS(fsys, name)
+	if err != nil {
+		c.pkg.fail(err)
+		return &fileHandle{}
+	}
+	return c.WithFile(logicalName, src)
 }
 
 func (c *compHandle) AssociateToFeature(featureID string) ComponentBuilder {

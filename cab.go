@@ -19,11 +19,102 @@ import (
 	"compress/flate"
 	"encoding/binary"
 	"fmt"
+	"io"
+	"os"
 )
 
 type msiCabMember struct {
-	name string // File table primary key (identifier; never a path)
-	data []byte
+	name string     // File table primary key (identifier; never a path)
+	src  FileSource // re-openable payload; opened once per cabinet build
+}
+
+// memberSeqReader yields the logical concatenation of the members' payloads,
+// opening each source exactly when first needed and closing it at EOF. Only one
+// member source is open at a time, so the cabinet is framed without ever holding
+// a whole payload in memory.
+type memberSeqReader struct {
+	members []msiCabMember
+	i       int
+	cur     io.ReadCloser
+}
+
+func (r *memberSeqReader) Read(p []byte) (int, error) {
+	for {
+		if r.cur == nil {
+			if r.i >= len(r.members) {
+				return 0, io.EOF
+			}
+			c, err := r.members[r.i].src.Open()
+			if err != nil {
+				return 0, fmt.Errorf("msi cab: opening member %s: %w", r.members[r.i].name, err)
+			}
+			r.cur = c
+		}
+		n, err := r.cur.Read(p)
+		if n > 0 {
+			return n, nil
+		}
+		if err == io.EOF {
+			r.cur.Close()
+			r.cur = nil
+			r.i++
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		// n == 0, err == nil: read again from the same source.
+	}
+}
+
+func (r *memberSeqReader) Close() error {
+	if r.cur != nil {
+		err := r.cur.Close()
+		r.cur = nil
+		return err
+	}
+	return nil
+}
+
+// cabStage stages one folder's compressed CFDATA region so its total length is
+// known before the CFHEADER (which carries cbCabinet) is written, then replays
+// it into the cabinet. The author write path uses an on-disk temp file
+// (memory-bounded); the []byte convenience wrappers use an in-memory buffer.
+type cabStage interface {
+	io.Writer
+	reader() (io.Reader, error) // fresh reader over everything written so far
+	cleanup()
+}
+
+type memCabStage struct{ buf bytes.Buffer }
+
+func (m *memCabStage) Write(p []byte) (int, error) { return m.buf.Write(p) }
+func (m *memCabStage) reader() (io.Reader, error)  { return bytes.NewReader(m.buf.Bytes()), nil }
+func (m *memCabStage) cleanup()                    {}
+
+func newMemCabStage() (cabStage, error) { return &memCabStage{}, nil }
+
+type fileCabStage struct{ f *os.File }
+
+func newFileCabStage() (cabStage, error) {
+	f, err := os.CreateTemp("", "go-msix-cab-*")
+	if err != nil {
+		return nil, fmt.Errorf("msi cab: temp region: %w", err)
+	}
+	return &fileCabStage{f: f}, nil
+}
+
+func (s *fileCabStage) Write(p []byte) (int, error) { return s.f.Write(p) }
+func (s *fileCabStage) reader() (io.Reader, error) {
+	if _, err := s.f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return s.f, nil
+}
+func (s *fileCabStage) cleanup() {
+	name := s.f.Name()
+	s.f.Close()
+	os.Remove(name)
 }
 
 const (
@@ -80,7 +171,8 @@ const (
 )
 
 // buildMSICAB builds a single-folder MSZIP cabinet from members already ordered
-// by File.Sequence (the common case). Byte-identical to the historical writer.
+// by File.Sequence (the common case) and returns it as bytes. Byte-identical to
+// the historical writer; a thin convenience wrapper over the streaming writer.
 func buildMSICAB(members []msiCabMember) ([]byte, error) {
 	if len(members) == 0 {
 		return nil, fmt.Errorf("msi cab: no members (caller must skip cab creation entirely)")
@@ -88,15 +180,31 @@ func buildMSICAB(members []msiCabMember) ([]byte, error) {
 	return buildMSICABFolders([][]msiCabMember{members})
 }
 
-// buildMSICABFolders builds one MSZIP cabinet containing N independent CFFOLDERs
-// (each its own compressed stream). With a single folder it is byte-identical to
-// buildMSICAB. Returns an error (not a truncated cab) on any structural overflow.
+// buildMSICABFolders builds one MSZIP cabinet (N independent CFFOLDERs) and
+// returns it as bytes. Convenience wrapper over streamMSICABFolders using an
+// in-memory region stage; production callers stream via streamMSICABFolders.
 func buildMSICABFolders(folders [][]msiCabMember) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := streamMSICABFolders(&buf, folders, newMemCabStage); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// streamMSICABFolders writes one MSZIP cabinet (N independent CFFOLDERs, each
+// its own compressed stream) into dst, a forward-only sink. Because the CFHEADER
+// carries cbCabinet (total size) at the front and dst cannot be seeked, each
+// folder's compressed CFDATA region is first staged via newStage (an on-disk
+// temp for the author path) so its length — the only field not known from member
+// sizes up front — is learned before the header is emitted. Member payloads are
+// streamed through 32 KiB frames and never fully held in memory. Byte-identical
+// to the historical buffered writer.
+func streamMSICABFolders(dst io.Writer, folders [][]msiCabMember, newStage func() (cabStage, error)) error {
 	if len(folders) == 0 {
-		return nil, fmt.Errorf("msi cab: no folders")
+		return fmt.Errorf("msi cab: no folders")
 	}
 	if len(folders) > 0xFFFF {
-		return nil, fmt.Errorf("msi cab: %d folders exceeds the 65535 per-cabinet limit", len(folders))
+		return fmt.Errorf("msi cab: %d folders exceeds the 65535 per-cabinet limit", len(folders))
 	}
 
 	totalFiles := 0
@@ -104,80 +212,99 @@ func buildMSICABFolders(folders [][]msiCabMember) ([]byte, error) {
 		totalFiles += len(f)
 	}
 	if totalFiles == 0 {
-		return nil, fmt.Errorf("msi cab: no members (caller must skip cab creation entirely)")
+		return fmt.Errorf("msi cab: no members (caller must skip cab creation entirely)")
 	}
 	if totalFiles > 0xFFFF {
-		return nil, fmt.Errorf("msi cab: %d members exceeds the 65535 per-cabinet limit", totalFiles)
+		return fmt.Errorf("msi cab: %d members exceeds the 65535 per-cabinet limit", totalFiles)
 	}
 
 	type folderData struct {
-		region  []byte
-		blocks  int
-		members []msiCabMember
+		stage     cabStage
+		regionLen int64
+		blocks    int
+		members   []msiCabMember
 	}
 	fds := make([]folderData, len(folders))
+	defer func() {
+		for i := range fds {
+			if fds[i].stage != nil {
+				fds[i].stage.cleanup()
+			}
+		}
+	}()
+
 	var filesSection uint32
 	for fi, mem := range folders {
 		if len(mem) == 0 {
-			return nil, fmt.Errorf("msi cab: folder %d has no members", fi)
+			return fmt.Errorf("msi cab: folder %d has no members", fi)
 		}
 		var totalData uint64
 		for _, m := range mem {
 			if m.name == "" {
-				return nil, fmt.Errorf("msi cab: empty member name")
+				return fmt.Errorf("msi cab: empty member name")
 			}
-			if uint64(len(m.data)) > msiCabMaxFileSize {
-				return nil, fmt.Errorf("msi cab: member %s is %d bytes, exceeding the 0x7FFF8000 cbFile limit", m.name, len(m.data))
+			sz := m.src.Size()
+			if uint64(sz) > msiCabMaxFileSize {
+				return fmt.Errorf("msi cab: member %s is %d bytes, exceeding the 0x7FFF8000 cbFile limit", m.name, sz)
 			}
-			totalData += uint64(len(m.data))
+			totalData += uint64(sz)
 			filesSection += cabPerFileHdr + uint32(len(m.name)) + 1
 		}
 		numBlocks := (totalData + msiCabBlockSize - 1) / msiCabBlockSize
 		if numBlocks > 0xFFFF {
-			return nil, fmt.Errorf("msi cab: folder %d needs %d CFDATA blocks, exceeding the 65535 limit", fi, numBlocks)
+			return fmt.Errorf("msi cab: folder %d needs %d CFDATA blocks, exceeding the 65535 limit", fi, numBlocks)
 		}
-		region, blocks, err := buildMSICabDataRegion(mem, totalData)
+		stage, err := newStage()
 		if err != nil {
-			return nil, err
+			return err
 		}
-		fds[fi] = folderData{region: region, blocks: blocks, members: mem}
+		fds[fi].stage = stage
+		regionLen, blocks, err := streamCabDataRegion(stage, mem, totalData)
+		if err != nil {
+			return err
+		}
+		fds[fi].regionLen = regionLen
+		fds[fi].blocks = blocks
+		fds[fi].members = mem
 	}
 
 	coffFiles := uint32(cabHeaderSize + cabFolderSize*len(folders))
 	dataStart := coffFiles + filesSection
 	var totalRegion uint64
 	for _, fd := range fds {
-		totalRegion += uint64(len(fd.region))
+		totalRegion += uint64(fd.regionLen)
 	}
 	cbCabinet := uint64(dataStart) + totalRegion
 	if cbCabinet > 0x7FFFFFFF {
-		return nil, fmt.Errorf("msi cab: total cabinet size %d exceeds the format limit", cbCabinet)
+		return fmt.Errorf("msi cab: total cabinet size %d exceeds the format limit", cbCabinet)
 	}
 
-	buf := bytes.NewBuffer(make([]byte, 0, cbCabinet))
+	// Header section (CFHEADER + CFFOLDER + CFFILE) is bounded by file count, not
+	// payload size; assemble it in memory, then emit before the staged regions.
+	var hb bytes.Buffer
 
 	// CFHEADER
-	buf.WriteString("MSCF")
-	binary.Write(buf, binary.LittleEndian, uint32(0)) // reserved1
-	binary.Write(buf, binary.LittleEndian, uint32(cbCabinet))
-	binary.Write(buf, binary.LittleEndian, uint32(0)) // reserved2
-	binary.Write(buf, binary.LittleEndian, coffFiles)
-	binary.Write(buf, binary.LittleEndian, uint32(0)) // reserved3
-	buf.WriteByte(3)                                  // versionMinor
-	buf.WriteByte(1)                                  // versionMajor
-	binary.Write(buf, binary.LittleEndian, uint16(len(folders)))
-	binary.Write(buf, binary.LittleEndian, uint16(totalFiles))
-	binary.Write(buf, binary.LittleEndian, uint16(0)) // flags
-	binary.Write(buf, binary.LittleEndian, uint16(1)) // setID (constant; single-cab set)
-	binary.Write(buf, binary.LittleEndian, uint16(0)) // iCabinet
+	hb.WriteString("MSCF")
+	binary.Write(&hb, binary.LittleEndian, uint32(0)) // reserved1
+	binary.Write(&hb, binary.LittleEndian, uint32(cbCabinet))
+	binary.Write(&hb, binary.LittleEndian, uint32(0)) // reserved2
+	binary.Write(&hb, binary.LittleEndian, coffFiles)
+	binary.Write(&hb, binary.LittleEndian, uint32(0)) // reserved3
+	hb.WriteByte(3)                                   // versionMinor
+	hb.WriteByte(1)                                   // versionMajor
+	binary.Write(&hb, binary.LittleEndian, uint16(len(folders)))
+	binary.Write(&hb, binary.LittleEndian, uint16(totalFiles))
+	binary.Write(&hb, binary.LittleEndian, uint16(0)) // flags
+	binary.Write(&hb, binary.LittleEndian, uint16(1)) // setID (constant; single-cab set)
+	binary.Write(&hb, binary.LittleEndian, uint16(0)) // iCabinet
 
 	// CFFOLDER per folder (coffCabStart accumulates over prior folders' regions).
 	off := dataStart
 	for _, fd := range fds {
-		binary.Write(buf, binary.LittleEndian, off)
-		binary.Write(buf, binary.LittleEndian, uint16(fd.blocks))
-		binary.Write(buf, binary.LittleEndian, uint16(cabCompMSZIP))
-		off += uint32(len(fd.region))
+		binary.Write(&hb, binary.LittleEndian, off)
+		binary.Write(&hb, binary.LittleEndian, uint16(fd.blocks))
+		binary.Write(&hb, binary.LittleEndian, uint16(cabCompMSZIP))
+		off += uint32(fd.regionLen)
 	}
 
 	// CFFILE entries, grouped by folder; uoffFolderStart is cumulative within the
@@ -185,80 +312,84 @@ func buildMSICABFolders(folders [][]msiCabMember) ([]byte, error) {
 	for fi, fd := range fds {
 		var uoff uint32
 		for _, m := range fd.members {
-			binary.Write(buf, binary.LittleEndian, uint32(len(m.data))) // cbFile
-			binary.Write(buf, binary.LittleEndian, uoff)                // uoffFolderStart
-			binary.Write(buf, binary.LittleEndian, uint16(fi))          // iFolder
-			binary.Write(buf, binary.LittleEndian, uint16(cabDosDate))
-			binary.Write(buf, binary.LittleEndian, uint16(cabDosTime))
-			binary.Write(buf, binary.LittleEndian, uint16(cabAttrArchive))
-			buf.WriteString(m.name)
-			buf.WriteByte(0)
-			uoff += uint32(len(m.data))
+			binary.Write(&hb, binary.LittleEndian, uint32(m.src.Size())) // cbFile
+			binary.Write(&hb, binary.LittleEndian, uoff)                 // uoffFolderStart
+			binary.Write(&hb, binary.LittleEndian, uint16(fi))           // iFolder
+			binary.Write(&hb, binary.LittleEndian, uint16(cabDosDate))
+			binary.Write(&hb, binary.LittleEndian, uint16(cabDosTime))
+			binary.Write(&hb, binary.LittleEndian, uint16(cabAttrArchive))
+			hb.WriteString(m.name)
+			hb.WriteByte(0)
+			uoff += uint32(m.src.Size())
 		}
 	}
 
-	for _, fd := range fds {
-		buf.Write(fd.region)
+	if _, err := dst.Write(hb.Bytes()); err != nil {
+		return err
 	}
-	return buf.Bytes(), nil
+
+	// Replay each folder's staged CFDATA region into the cabinet.
+	for _, fd := range fds {
+		r, err := fd.stage.reader()
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(dst, r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// buildMSICabDataRegion produces the concatenated CFDATA records for one
-// MSZIP folder, chunking the logical concatenation of member payloads into
-// 32 KiB frames without materializing the full concatenation.
-func buildMSICabDataRegion(members []msiCabMember, totalData uint64) ([]byte, int, error) {
-	var out bytes.Buffer
-	blocks := 0
+// streamCabDataRegion writes the concatenated CFDATA records for one MSZIP
+// folder into w, framing the logical concatenation of the member payloads into
+// 32 KiB blocks read sequentially across the member sources (one open at a
+// time). It returns the byte length of the region and the block count. Frame
+// boundaries, MSZIP compression, and CFDATA checksums are identical to the
+// historical writer, so the output bytes are unchanged.
+func streamCabDataRegion(w io.Writer, members []msiCabMember, totalData uint64) (int64, int, error) {
+	src := &memberSeqReader{members: members}
+	defer src.Close()
 
-	mi := 0 // member index
-	mo := 0 // intra-member offset
+	frame := make([]byte, msiCabBlockSize)
+	var regionLen int64
+	blocks := 0
 	var consumed uint64
-	frame := make([]byte, 0, msiCabBlockSize)
 
 	for consumed < totalData {
-		// Fill one frame from the member cursor.
-		frame = frame[:0]
-		for len(frame) < msiCabBlockSize && mi < len(members) {
-			d := members[mi].data
-			avail := len(d) - mo
-			if avail <= 0 {
-				mi++
-				mo = 0
-				continue
-			}
-			take := msiCabBlockSize - len(frame)
-			if take > avail {
-				take = avail
-			}
-			frame = append(frame, d[mo:mo+take]...)
-			mo += take
-			if mo >= len(d) {
-				mi++
-				mo = 0
-			}
+		want := msiCabBlockSize
+		if rem := totalData - consumed; rem < uint64(want) {
+			want = int(rem)
 		}
-		if len(frame) == 0 {
-			break
+		if _, err := io.ReadFull(src, frame[:want]); err != nil {
+			return 0, 0, fmt.Errorf("msi cab: reading member data: %w", err)
 		}
-		consumed += uint64(len(frame))
+		consumed += uint64(want)
 
-		ab, err := msiMSZIPBlock(frame)
+		ab, err := msiMSZIPBlock(frame[:want])
 		if err != nil {
-			return nil, 0, err
+			return 0, 0, err
 		}
 
 		var hdr [4]byte
-		binary.LittleEndian.PutUint16(hdr[0:], uint16(len(ab)))    // cbData
-		binary.LittleEndian.PutUint16(hdr[2:], uint16(len(frame))) // cbUncomp
+		binary.LittleEndian.PutUint16(hdr[0:], uint16(len(ab))) // cbData
+		binary.LittleEndian.PutUint16(hdr[2:], uint16(want))    // cbUncomp
 		csum := cabChecksum(hdr[:], cabChecksum(ab, 0))
 
-		binary.Write(&out, binary.LittleEndian, csum)
-		out.Write(hdr[:])
-		out.Write(ab)
+		var rec [8]byte
+		binary.LittleEndian.PutUint32(rec[0:], csum)
+		copy(rec[4:], hdr[:])
+		if _, err := w.Write(rec[:]); err != nil {
+			return 0, 0, err
+		}
+		if _, err := w.Write(ab); err != nil {
+			return 0, 0, err
+		}
+		regionLen += int64(8 + len(ab))
 		blocks++
 	}
 
-	return out.Bytes(), blocks, nil
+	return regionLen, blocks, nil
 }
 
 // msiMSZIPBlock compresses one frame as an MSZIP block: 'CK' + one complete

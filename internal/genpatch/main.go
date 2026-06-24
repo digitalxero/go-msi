@@ -32,8 +32,8 @@ func base() msix.PackageBuilder {
 		WithVersion("1.0.0")
 	c := b.RootDirectory("INSTALLFOLDER", "Go MSIX Patch Demo").
 		Component("Main").AssociateToFeature("MainFeature")
-	c.WithFile("a.exe", []byte(baseAContent))
-	c.WithFile("b.dat", []byte(bContent))
+	c.WithFile("a.exe", msix.FileSourceFromBytes([]byte(baseAContent)))
+	c.WithFile("b.dat", msix.FileSourceFromBytes([]byte(bContent)))
 	b.Feature("MainFeature").WithTitle("Main Feature").WithLevel(1)
 	return b
 }
@@ -47,9 +47,9 @@ func upgraded() msix.PackageBuilder {
 		WithVersion("1.0.1")
 	c := b.RootDirectory("INSTALLFOLDER", "Go MSIX Patch Demo").
 		Component("Main").AssociateToFeature("MainFeature")
-	c.WithFile("a.exe", []byte(newAContent))
-	c.WithFile("b.dat", []byte(bContent))
-	c.WithFile("c.dat", []byte(cContent))
+	c.WithFile("a.exe", msix.FileSourceFromBytes([]byte(newAContent)))
+	c.WithFile("b.dat", msix.FileSourceFromBytes([]byte(bContent)))
+	c.WithFile("c.dat", msix.FileSourceFromBytes([]byte(cContent)))
 	b.Feature("MainFeature").WithTitle("Main Feature").WithLevel(1)
 	return b
 }

@@ -24,8 +24,10 @@ func TestLanguageCode_NamedConstants(t *testing.T) {
 		WithProductCode("{AAAAAAAA-1111-2222-3333-444444444444}").
 		WithProductName("L10n").WithManufacturer("go-msix").WithVersion("1.0.0").
 		WithLanguage(LangCode_frFR)
-	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		WithFile("a.exe", []byte("MZ"))
+	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)
@@ -83,8 +85,10 @@ func p9EmbeddedTransformPackage(t *testing.T) *msiPackage {
 			de.WithProductName("Mein Programm")
 			de.WithProperty("PROPA", "deutsch")
 		})
-	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		WithFile("a.exe", []byte("MZ"))
+	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)
@@ -156,8 +160,10 @@ func TestEmbeddedTransform_SignedVerifiesWithRecursiveImprint(t *testing.T) {
 		WithLanguageTransform(1031, func(de PackageBuilder) {
 			de.WithProductName("Mein Programm")
 		})
-	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		WithFile("a.exe", []byte("MZ"))
+	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)
@@ -187,8 +193,10 @@ func TestEmbeddedTransform_NoneIsByteIdenticalToNoTransform(t *testing.T) {
 			WithProductName("My Program").
 			WithManufacturer("go-msix").
 			WithVersion("1.0.0")
-		b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-			WithFile("a.exe", []byte("MZ"))
+		b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+			"a.exe", FileSourceFromBytes(
+				[]byte("MZ")))
+
 		b.Feature("F").WithLevel(1)
 		pkg, err := b.Build()
 		require.NoError(t, err)

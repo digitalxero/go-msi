@@ -39,7 +39,10 @@ func TestCompileP6_CustomDialog(t *testing.T) {
 		ScheduleInUI(1298, "")
 
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -103,7 +106,10 @@ func TestCompileP6_MinimalUI(t *testing.T) {
 		WithLicenseText("My EULA text.")
 
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -162,7 +168,10 @@ func TestCompileP6_DoubleWriteNoDuplication(t *testing.T) {
 		WithMinimalUI().
 		MajorUpgrade().Done()
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -198,7 +207,10 @@ func p6UIPackage(t *testing.T, configure func(d DialogBuilder)) msiDatabase {
 	d := b.Dialog("D").WithSize(370, 270).ScheduleInUI(1297, "")
 	configure(d)
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)
@@ -299,7 +311,10 @@ func TestCompileP6_CustomDialogIsICEClean(t *testing.T) {
 		OnEvent("EndDialog", "Return", "").EndControl()
 	dlg.WithDefaultControl("Install").WithCancelControl("Install").ScheduleInUI(1298, "")
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -320,7 +335,10 @@ func TestCompileP6_TextStyleAndUIText(t *testing.T) {
 	b.TextStyle("TitleFont", "Tahoma", 9).Bold().WithColor(0, 0, 128).Done()
 
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()

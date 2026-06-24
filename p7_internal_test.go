@@ -15,8 +15,8 @@ import (
 func TestCab_SingleFolderUnchanged(t *testing.T) {
 	// buildMSICAB and the 1-folder buildMSICABFolders must be byte-identical.
 	members := []msiCabMember{
-		{name: "filA", data: []byte("alpha payload")},
-		{name: "filB", data: bytes.Repeat([]byte("xy"), 50000)},
+		{name: "filA", src: FileSourceFromBytes([]byte("alpha payload"))},
+		{name: "filB", src: FileSourceFromBytes(bytes.Repeat([]byte("xy"), 50000))},
 	}
 	a, err := buildMSICAB(members)
 	require.NoError(t, err)
@@ -34,11 +34,11 @@ func TestCab_MultiFolderRoundTrip(t *testing.T) {
 	// Three independent folders, each with its own files; round-trip through the
 	// reader resolves files by iFolder + uoffFolderStart.
 	folders := [][]msiCabMember{
-		{{name: "fil01", data: []byte("first folder file one")},
-			{name: "fil02", data: bytes.Repeat([]byte("A"), 40000)}}, // >1 CFDATA block
-		{{name: "fil03", data: []byte("second folder")}},
-		{{name: "fil04", data: bytes.Repeat([]byte{0}, 70000)}, // all-zeros: MSZIP degenerate path
-			{name: "fil05", data: []byte("tail")}},
+		{{name: "fil01", src: FileSourceFromBytes([]byte("first folder file one"))},
+			{name: "fil02", src: FileSourceFromBytes(bytes.Repeat([]byte("A"), 40000))}}, // >1 CFDATA block
+		{{name: "fil03", src: FileSourceFromBytes([]byte("second folder"))}},
+		{{name: "fil04", src: FileSourceFromBytes(bytes.Repeat([]byte{0}, 70000))}, // all-zeros: MSZIP degenerate path
+			{name: "fil05", src: FileSourceFromBytes([]byte("tail"))}},
 	}
 	cab, err := buildMSICABFolders(folders)
 	require.NoError(t, err)
@@ -65,9 +65,9 @@ func TestCabSpan_RoundTripAndFields(t *testing.T) {
 	// file spans several cabs.
 	big := bytes.Repeat([]byte("SPANME.."), 37500) // 300000 bytes, compressible
 	members := []msiCabMember{
-		{name: "filhead", data: []byte("small head")},
-		{name: "filbig", data: big},
-		{name: "filtail", data: []byte("small tail")},
+		{name: "filhead", src: FileSourceFromBytes([]byte("small head"))},
+		{name: "filbig", src: FileSourceFromBytes(big)},
+		{name: "filtail", src: FileSourceFromBytes([]byte("small tail"))},
 	}
 	names := []string{"cab1.cab", "cab2.cab", "cab3.cab", "cab4.cab", "cab5.cab"}
 	set, err := buildMSICabSpanned(members, 128*1024, names, 0x1234)
@@ -76,9 +76,11 @@ func TestCabSpan_RoundTripAndFields(t *testing.T) {
 
 	// Header field assertions across the set.
 	for i, sc := range set {
-		flags := leU16(sc.data[30:])
-		setID := leU16(sc.data[32:])
-		iCab := leU16(sc.data[34:])
+		data, err := sc.bytes()
+		require.NoError(t, err)
+		flags := leU16(data[30:])
+		setID := leU16(data[32:])
+		iCab := leU16(data[34:])
 		assert.Equal(t, uint16(0x1234), setID, "shared setID")
 		assert.Equal(t, uint16(i), iCab, "ascending iCabinet")
 		if i > 0 {
@@ -98,7 +100,9 @@ func TestCabSpan_RoundTripAndFields(t *testing.T) {
 	for _, sc := range set {
 		// scan CFFILE iFolder values quickly via the reader's own parse later;
 		// here just confirm at least one cab declares a TO_NEXT/FROM_PREV file.
-		if bytes.Contains(sc.data, []byte("filbig")) {
+		data, err := sc.bytes()
+		require.NoError(t, err)
+		if bytes.Contains(data, []byte("filbig")) {
 			sawToNext = true
 		}
 	}
@@ -115,19 +119,21 @@ func TestCabSpan_RoundTripAndFields(t *testing.T) {
 func TestCabSpan_ContinuedMarkers(t *testing.T) {
 	// Confirm the ifold CONTINUED values appear for a file crossing a boundary.
 	big := bytes.Repeat([]byte{0xAB}, 200000)
-	set, err := buildMSICabSpanned([]msiCabMember{{name: "filx", data: big}}, 64*1024, []string{"a", "b", "c", "d"}, 7)
+	set, err := buildMSICabSpanned([]msiCabMember{{name: "filx", src: FileSourceFromBytes(big)}}, 64*1024, []string{"a", "b", "c", "d"}, 7)
 	require.NoError(t, err)
 	require.Greater(t, len(set), 1)
 
 	// First cab: the file ends after this cab -> CONTINUED_TO_NEXT.
 	// CFFILE iFolder is at coffFiles+8. coffFiles is data[16:].
-	first := set[0].data
+	first, err := set[0].bytes()
+	require.NoError(t, err)
 	coffFiles := int(leU16(first[16:])) | int(leU16(first[18:]))<<16
 	ifoldFirst := leU16(first[coffFiles+8:])
 	assert.Equal(t, cabIFoldContinuedToNext, ifoldFirst, "first cab marks the file TO_NEXT")
 
 	// Last cab: the file started earlier -> CONTINUED_FROM_PREV.
-	last := set[len(set)-1].data
+	last, err := set[len(set)-1].bytes()
+	require.NoError(t, err)
 	coffFilesL := int(leU16(last[16:])) | int(leU16(last[18:]))<<16
 	ifoldLast := leU16(last[coffFilesL+8:])
 	assert.Equal(t, cabIFoldContinuedFromPrev, ifoldLast, "last cab marks the file FROM_PREV")
@@ -143,9 +149,9 @@ func TestCompileP7_AutoSplitMultiCab(t *testing.T) {
 		WithVersion("1.0.0").
 		WithCabSplitThreshold(70000)
 	c := b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F")
-	c.WithFile("a.bin", big('a'))
-	c.WithFile("b.bin", big('b'))
-	c.WithFile("c.bin", big('c'))
+	c.WithFile("a.bin", FileSourceFromBytes(big('a')))
+	c.WithFile("b.bin", FileSourceFromBytes(big('b')))
+	c.WithFile("c.bin", FileSourceFromBytes(big('c')))
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -167,7 +173,7 @@ func TestCompileP7_AutoSplitMultiCab(t *testing.T) {
 	assert.Equal(t, "#cab2.cab", d2[3])
 
 	// All three files round-trip from their respective cabs (reader reads all media).
-	fc := readDB.FileContents()
+	fc := drainFileSources(t, readDB.FileSources())
 	require.Len(t, fc, 3)
 	for _, name := range []string{"a.bin", "b.bin", "c.bin"} {
 		fid := generateMSIFileID("INSTALLFOLDER/"+name, big(name[0]))
@@ -182,10 +188,14 @@ func TestCompileP7_ExplicitMediaAssignment(t *testing.T) {
 		WithManufacturer("go-msix").
 		WithVersion("1.0.0")
 	install := b.RootDirectory("INSTALLFOLDER", "App")
-	install.Component("Core").AssociateToFeature("F").AssignToMedia(1).
-		WithFile("core.bin", []byte("core data"))
-	install.Component("Extra").AssociateToFeature("F").AssignToMedia(2).
-		WithFile("extra.bin", []byte("extra data"))
+	install.Component("Core").AssociateToFeature("F").AssignToMedia(1).WithFile(
+		"core.bin", FileSourceFromBytes(
+			[]byte("core data")))
+
+	install.Component("Extra").AssociateToFeature("F").AssignToMedia(2).WithFile(
+		"extra.bin", FileSourceFromBytes(
+			[]byte("extra data")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -200,7 +210,7 @@ func TestCompileP7_ExplicitMediaAssignment(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mediaTbl.rows(), 2)
 
-	fc := readDB.FileContents()
+	fc := drainFileSources(t, readDB.FileSources())
 	coreID := generateMSIFileID("INSTALLFOLDER/core.bin", []byte("core data"))
 	extraID := generateMSIFileID("INSTALLFOLDER/extra.bin", []byte("extra data"))
 	assert.Equal(t, []byte("core data"), fc[coreID])
@@ -216,9 +226,9 @@ func TestCompileP7_MultiFolderWithinCab(t *testing.T) {
 		WithVersion("1.0.0").
 		WithFolderThreshold(40000)
 	c := b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F")
-	c.WithFile("a.bin", bytes.Repeat([]byte("a"), 30000))
-	c.WithFile("b.bin", bytes.Repeat([]byte("b"), 30000))
-	c.WithFile("d.bin", bytes.Repeat([]byte("d"), 30000))
+	c.WithFile("a.bin", FileSourceFromBytes(bytes.Repeat([]byte("a"), 30000)))
+	c.WithFile("b.bin", FileSourceFromBytes(bytes.Repeat([]byte("b"), 30000)))
+	c.WithFile("d.bin", FileSourceFromBytes(bytes.Repeat([]byte("d"), 30000)))
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -236,7 +246,7 @@ func TestCompileP7_MultiFolderWithinCab(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mediaTbl.rows(), 1)
 
-	fc := readDB.FileContents()
+	fc := drainFileSources(t, readDB.FileSources())
 	require.Len(t, fc, 3)
 	assert.Equal(t, bytes.Repeat([]byte("b"), 30000), fc[generateMSIFileID("INSTALLFOLDER/b.bin", bytes.Repeat([]byte("b"), 30000))])
 }
@@ -252,8 +262,8 @@ func TestCompileP7_SpanningEmbeddedRoundTrip(t *testing.T) {
 		WithVersion("1.0.0").
 		WithSpanning(128 * 1024)
 	c := b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F")
-	c.WithFile("small.txt", []byte("a small companion file"))
-	c.WithFile("big.bin", big)
+	c.WithFile("small.txt", FileSourceFromBytes([]byte("a small companion file")))
+	c.WithFile("big.bin", FileSourceFromBytes(big))
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -265,7 +275,7 @@ func TestCompileP7_SpanningEmbeddedRoundTrip(t *testing.T) {
 	require.NoError(t, readDB.validate())
 
 	// Both files reassemble exactly through the spanning-aware reader.
-	fc := readDB.FileContents()
+	fc := drainFileSources(t, readDB.FileSources())
 	smallID := generateMSIFileID("INSTALLFOLDER/small.txt", []byte("a small companion file"))
 	bigID := generateMSIFileID("INSTALLFOLDER/big.bin", big)
 	assert.Equal(t, []byte("a small companion file"), fc[smallID])
@@ -304,10 +314,14 @@ func TestCompileP7_ExternalCab(t *testing.T) {
 	b.Media(2).External().WithCabinet("disk2.cab")
 
 	install := b.RootDirectory("INSTALLFOLDER", "App")
-	install.Component("Core").AssociateToFeature("F").AssignToMedia(1).
-		WithFile("core.bin", []byte("embedded core"))
-	install.Component("Extra").AssociateToFeature("F").AssignToMedia(2).
-		WithFile("extra.bin", []byte("external extra payload"))
+	install.Component("Core").AssociateToFeature("F").AssignToMedia(1).WithFile(
+		"core.bin", FileSourceFromBytes(
+			[]byte("embedded core")))
+
+	install.Component("Extra").AssociateToFeature("F").AssignToMedia(2).WithFile(
+		"extra.bin", FileSourceFromBytes(
+			[]byte("external extra payload")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -330,7 +344,7 @@ func TestCompileP7_ExternalCab(t *testing.T) {
 	// The embedded MSI only carries the disk-1 (embedded) file.
 	coreID := generateMSIFileID("INSTALLFOLDER/core.bin", []byte("embedded core"))
 	extraID := generateMSIFileID("INSTALLFOLDER/extra.bin", []byte("external extra payload"))
-	fc := readDB.FileContents()
+	fc := drainFileSources(t, readDB.FileSources())
 	assert.Equal(t, []byte("embedded core"), fc[coreID])
 	_, hasExtra := fc[extraID]
 	assert.False(t, hasExtra, "external file is NOT embedded in the MSI")
@@ -350,7 +364,10 @@ func TestCompileP7_ExternalCabWithoutWriterErrors(t *testing.T) {
 		WithVersion("1.0.0")
 	b.Media(1).External().WithCabinet("disk1.cab")
 	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		AssignToMedia(1).WithFile("a.bin", []byte("x"))
+		AssignToMedia(1).WithFile(
+		"a.bin", FileSourceFromBytes(
+			[]byte("x")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -367,9 +384,9 @@ func TestICE07_MediaCoverage_Golden(t *testing.T) {
 	db.WithStandardProperties("X", "1.0.0", "Y", "{12345678-1234-1234-1234-123456789ABC}")
 	db.WithDirectory("TARGETDIR", "", "SourceDir")
 	db.WithComponent("Main", "{11111111-2222-3333-4444-555555555555}", "TARGETDIR", 0, "fil1")
-	db.WithFile("Main", "fil1", "a.txt", []byte("x"), "", int16(1))
-	db.WithFile("Main", "fil2", "b.txt", []byte("y"), "", int16(5)) // seq 5
-	db.WithMedia(1, 1, "#cab1.cab")                                 // covers only seq 1
+	db.WithFileSource("Main", "fil1", "a.txt", FileSourceFromBytes([]byte("x")), "", int16(1))
+	db.WithFileSource("Main", "fil2", "b.txt", FileSourceFromBytes([]byte("y")), "", int16(5)) // seq 5
+	db.WithMedia(1, 1, "#cab1.cab")                                                            // covers only seq 1
 	built, err := db.Build()
 	require.NoError(t, err)
 
@@ -389,9 +406,9 @@ func TestICE07_MediaCoverage_Golden(t *testing.T) {
 		WithProductName("Clean Media").WithManufacturer("go-msix").WithVersion("1.0.0").
 		WithCabSplitThreshold(70000)
 	c := b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F")
-	c.WithFile("a.bin", bytes.Repeat([]byte("a"), 30000))
-	c.WithFile("b.bin", bytes.Repeat([]byte("b"), 30000))
-	c.WithFile("d.bin", bytes.Repeat([]byte("d"), 30000))
+	c.WithFile("a.bin", FileSourceFromBytes(bytes.Repeat([]byte("a"), 30000)))
+	c.WithFile("b.bin", FileSourceFromBytes(bytes.Repeat([]byte("b"), 30000)))
+	c.WithFile("d.bin", FileSourceFromBytes(bytes.Repeat([]byte("d"), 30000)))
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build() // validate-by-default runs ICE07
 	require.NoError(t, err, "well-formed multi-cab package must be ICE07-clean")

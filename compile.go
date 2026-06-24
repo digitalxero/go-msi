@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 )
@@ -48,12 +49,23 @@ func compileMSIFileHashRows(p *msiPackage) (msiTable, error) {
 			if f.version != "" {
 				continue
 			}
-			sum := md5.Sum(f.data)
+			rc, err := f.src.Open()
+			if err != nil {
+				return nil, fmt.Errorf("msi compile: MsiFileHash open %s: %w", f.name, err)
+			}
+			hsh := md5.New()
+			if _, err := io.Copy(hsh, rc); err != nil {
+				rc.Close()
+				return nil, fmt.Errorf("msi compile: MsiFileHash read %s: %w", f.name, err)
+			}
+			rc.Close()
+			var sum [16]byte
+			copy(sum[:], hsh.Sum(nil))
 			h1 := int32(binary.LittleEndian.Uint32(sum[0:4]))
 			h2 := int32(binary.LittleEndian.Uint32(sum[4:8]))
 			h3 := int32(binary.LittleEndian.Uint32(sum[8:12]))
 			h4 := int32(binary.LittleEndian.Uint32(sum[12:16]))
-			fid := generateMSIFileID(c.dirID+"/"+f.name, f.data)
+			fid := generateMSIFileID(c.dirID+"/"+f.name, nil)
 			row := newMSIRowBuilder().WithColumns(hashTbl.columns()...).
 				WithValues(fid, int16(0), h1, h2, h3, h4).Build()
 			if err := hashTbl.addRow(row); err != nil {
@@ -299,8 +311,8 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 		e := p.compEntries[cid]
 		for _, f := range e.files {
 			logical := e.dirID + "/" + f.name
-			fid := generateMSIFileID(logical, f.data)
-			orderedFiles = append(orderedFiles, mediaFileRef{fileID: fid, size: int64(len(f.data)), component: cid})
+			fid := generateMSIFileID(logical, nil)
+			orderedFiles = append(orderedFiles, mediaFileRef{fileID: fid, size: f.src.Size(), component: cid})
 		}
 	}
 	seqByFile, mediaPlan, err := planMedia(p, orderedFiles)
@@ -324,14 +336,14 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 		if kp == nil && len(e.files) > 0 {
 			first := e.files[0]
 			logical := e.dirID + "/" + first.name
-			kp = generateMSIFileID(logical, first.data)
+			kp = generateMSIFileID(logical, nil)
 		}
 		db.WithComponent(cid, g, e.dirID, e.attrs, kp)
 
 		for _, f := range e.files {
 			hasFiles = true
 			logical := e.dirID + "/" + f.name
-			fid := generateMSIFileID(logical, f.data)
+			fid := generateMSIFileID(logical, nil)
 
 			// File.FileName column gets the short|long form from the *directory's*
 			// namer (not a global one). This matches how real MSIs and the
@@ -346,7 +358,7 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 				return nil, fmt.Errorf("msi compile: File %s name %q: %w", fid, f.name, err)
 			}
 
-			db.WithFile(cid, fid, fileNameColumn, f.data, f.version, seqByFile[fid])
+			db.WithFileSource(cid, fid, fileNameColumn, f.src, f.version, seqByFile[fid])
 		}
 	}
 
@@ -421,11 +433,18 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 		db.WithTable(scTbl)
 	}
 
-	// P3: Icon and Binary tables (global assets).
+	// P3: Icon and Binary tables (global assets). These embed as discrete CFB
+	// side streams stored in a table binary cell, so their bytes are materialized
+	// here (bounded — icons/binaries are small author-supplied assets); the bulk
+	// streaming win is the cabinet payload, not these.
 	if len(p.iconEntries) > 0 {
 		iconTbl := createMSITableFromCatalog("Icon")
 		for _, e := range p.iconEntries {
-			row := newMSIRowBuilder().WithColumns(iconTbl.columns()...).WithValues(e.name, e.data).Build()
+			data, err := readAllFromSource(e.src)
+			if err != nil {
+				return nil, fmt.Errorf("msi compile: Icon %s: %w", e.name, err)
+			}
+			row := newMSIRowBuilder().WithColumns(iconTbl.columns()...).WithValues(e.name, data).Build()
 			if err := iconTbl.addRow(row); err != nil {
 				return nil, fmt.Errorf("msi compile: Icon row %s: %w", e.name, err)
 			}
@@ -435,7 +454,11 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 	if len(p.binaryEntries) > 0 {
 		binTbl := createMSITableFromCatalog("Binary")
 		for _, e := range p.binaryEntries {
-			row := newMSIRowBuilder().WithColumns(binTbl.columns()...).WithValues(e.name, e.data).Build()
+			data, err := readAllFromSource(e.src)
+			if err != nil {
+				return nil, fmt.Errorf("msi compile: Binary %s: %w", e.name, err)
+			}
+			row := newMSIRowBuilder().WithColumns(binTbl.columns()...).WithValues(e.name, data).Build()
 			if err := binTbl.addRow(row); err != nil {
 				return nil, fmt.Errorf("msi compile: Binary row %s: %w", e.name, err)
 			}

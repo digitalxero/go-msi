@@ -40,12 +40,15 @@ func buildP3RoundTripPackage(t *testing.T) (msiDatabase, []byte) {
 		WithProductName("P3 RoundTrip").
 		WithManufacturer("go-msix").
 		WithVersion("1.0.0").
-		Icon("AppIcon", iconData).
-		Binary("Helper", binData)
+		Icon("AppIcon", FileSourceFromBytes(iconData)).Binary(
+
+		"Helper", FileSourceFromBytes(
+
+			binData))
 
 	install := b.RootDirectory("INSTALLFOLDER", "P3App")
 	comp := install.Component("Main").AssociateToFeature("MainFeature")
-	comp.WithFile("app.exe", []byte("MZ main executable"))
+	comp.WithFile("app.exe", FileSourceFromBytes([]byte("MZ main executable")))
 
 	// RegistryKey path with multiple typed values + AsKeyPath. encodeRegistryValue
 	// maps string->as-is, int->#decimal, []byte->#xHEX.
@@ -165,7 +168,7 @@ func TestCompileP3_ShortcutNullIconWhenUnset(t *testing.T) {
 		WithVersion("1.0.0")
 	install := b.RootDirectory("INSTALLFOLDER", "App")
 	comp := install.Component("Main").AssociateToFeature("F")
-	comp.WithFile("app.exe", []byte("MZ"))
+	comp.WithFile("app.exe", FileSourceFromBytes([]byte("MZ")))
 	comp.Shortcut("Plain.lnk", "[#app.exe]")
 	b.Feature("F").WithLevel(1)
 
@@ -192,7 +195,7 @@ func TestCompileP3_AdvertisedShortcutTargetIsFeature(t *testing.T) {
 		WithVersion("1.0.0")
 	install := b.RootDirectory("INSTALLFOLDER", "App")
 	comp := install.Component("Main").AssociateToFeature("MainFeature")
-	comp.WithFile("app.exe", []byte("MZ"))
+	comp.WithFile("app.exe", FileSourceFromBytes([]byte("MZ")))
 	comp.Shortcut("Adv.lnk", "[#app.exe]").Advertised("MainFeature")
 	b.Feature("MainFeature").WithLevel(1)
 

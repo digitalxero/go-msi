@@ -36,7 +36,7 @@ func TestNewMSIPackage_BasicChainingAndBuild(t *testing.T) {
 		AssociateToFeature("MainFeature")
 
 	// File addition returns FileBuilder (version etc.).
-	_ = comp.WithFile("app.exe", []byte("MZ..."))
+	_ = comp.WithFile("app.exe", msi.FileSourceFromBytes([]byte("MZ...")))
 
 	// Feature configuration.
 	b.Feature("MainFeature").
@@ -185,12 +185,15 @@ func TestP3Builders(t *testing.T) {
 		WithManufacturer("go-msix").
 		WithVersion("1.0").
 		WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
-		Icon("MyIcon", []byte{0x00, 0x01, 0x02, 0x03}).
-		Binary("MyBin", []byte("binary data payload"))
+		Icon("MyIcon", msi.FileSourceFromBytes([]byte{0x00, 0x01, 0x02, 0x03})).Binary(
+
+		"MyBin", msi.FileSourceFromBytes(
+
+			[]byte("binary data payload")))
 
 	install := b.RootDirectory("INSTALLFOLDER", "P3App")
 	comp := install.Component("Main").AssociateToFeature("MainFeature")
-	comp.WithFile("MainExe", []byte("MZ payload"))
+	comp.WithFile("MainExe", msi.FileSourceFromBytes([]byte("MZ payload")))
 
 	// Registry key with values + AsKeyPath
 	_ = comp.RegistryKey(msi.RegistryRootHKLM, `Software\MyApp`).
@@ -249,8 +252,12 @@ func TestMSIValidator_Basic(t *testing.T) {
 	// component is associated with a feature so the package is complete (an
 	// orphan component is an ICE21 error and would not install).
 	b.RootDirectory("INSTALLFOLDER", "ValTest").
-		Component("Main").AssociateToFeature("Main").
-		WithFile("dummy.txt", []byte("hello"))
+		Component("Main").AssociateToFeature("Main").WithFile(
+
+		"dummy.txt", msi.FileSourceFromBytes(
+
+			[]byte("hello")))
+
 	b.Feature("Main").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -308,8 +315,12 @@ func TestMSIPackage_ICE39_RunsOnRealPackageCode(t *testing.T) {
 		WithVersion("1.0.0").
 		WithProductCode("{12345678-1234-1234-1234-123456789ABC}")
 	b.RootDirectory("INSTALLFOLDER", "ICE39Test").
-		Component("Main").AssociateToFeature("Main").
-		WithFile("dummy.txt", []byte("hello"))
+		Component("Main").AssociateToFeature("Main").WithFile(
+
+		"dummy.txt", msi.FileSourceFromBytes(
+
+			[]byte("hello")))
+
 	b.Feature("Main").WithLevel(1)
 
 	pkg, err := b.Build()

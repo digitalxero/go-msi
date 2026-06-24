@@ -23,8 +23,11 @@ func buildP5CAPackage(t *testing.T) msiDatabase {
 		WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
 		WithProductName("P5 CA").
 		WithManufacturer("go-msix").
-		WithVersion("1.0.0").
-		Binary("CaDll", []byte("MZ fake dll"))
+		WithVersion("1.0.0").Binary(
+
+		"CaDll", FileSourceFromBytes(
+
+			[]byte("MZ fake dll")))
 
 	// SetProperty (type 51): Source=property, Target=value.
 	b.CustomAction("SetFoo").SetProperty("FOO", "bar")
@@ -43,8 +46,12 @@ func buildP5CAPackage(t *testing.T) msiDatabase {
 	b.CustomAction("RetargetDir").SetDirectory("INSTALLFOLDER", "[ProgramFilesFolder]MyApp")
 
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").
-		WithFile("app.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+
+		"app.exe", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -95,12 +102,19 @@ func TestCompileP5_RollbackCommitTypes(t *testing.T) {
 		WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
 		WithProductName("P5 RC").
 		WithManufacturer("go-msix").
-		WithVersion("1.0.0").
-		Binary("Bin", []byte("x"))
+		WithVersion("1.0.0").Binary(
+
+		"Bin", FileSourceFromBytes(
+
+			[]byte("x")))
+
 	b.CustomAction("Roll").EXEFromBinary("Bin", "/rollback").Rollback()
 	b.CustomAction("Comm").EXEFromBinary("Bin", "/commit").Commit()
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -155,7 +169,10 @@ func TestCompileP5_ScheduleAfterBeforeAt(t *testing.T) {
 		ScheduleAt(InstallExecuteSequence, 2500, "")
 
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -195,7 +212,10 @@ func TestCompileP5_ScheduleMissingAnchorErrors(t *testing.T) {
 	b.CustomAction("Orphan").SetProperty("X", "1").
 		ScheduleAfter(InstallExecuteSequence, "InstallServices", "")
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -224,7 +244,10 @@ func buildP5CAPackageFilesOnly(t *testing.T) msiDatabase {
 		WithManufacturer("go-msix").
 		WithVersion("1.0.0")
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)
@@ -337,14 +360,21 @@ func TestCompileP5_DeferredCAIsICEClean(t *testing.T) {
 		WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
 		WithProductName("Clean CA").
 		WithManufacturer("go-msix").
-		WithVersion("1.0.0").
-		Binary("Bin", []byte("MZ"))
+		WithVersion("1.0.0").Binary(
+
+		"Bin", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.CustomAction("DoWork").
 		EXEFromBinary("Bin", "--work").
 		Deferred().
 		ScheduleAfter(InstallExecuteSequence, "InstallFiles", "NOT Installed")
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -360,7 +390,10 @@ func TestCompileP5_NoCustomActionTableWhenUnused(t *testing.T) {
 		WithManufacturer("go-msix").
 		WithVersion("1.0.0")
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()

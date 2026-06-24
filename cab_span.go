@@ -17,12 +17,29 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 )
 
-// spannedCab is one physical cabinet in a set.
+// spannedCab is one physical cabinet in a set. The write side sets writeTo (the
+// cabinet is streamed into any sink on demand, never fully buffered); the read
+// side (and tests that want the bytes) set data. bytes() yields whichever is set.
 type spannedCab struct {
-	name string // logical cab name (e.g. "cab1.cab")
-	data []byte
+	name    string                // logical cab name (e.g. "cab1.cab")
+	data    []byte                // read-side / materialized bytes
+	writeTo func(io.Writer) error // write-side streaming emitter
+}
+
+// bytes materializes the physical cabinet (draining the streaming emitter when
+// the write side produced one). Used by the reader's reassembler and by tests.
+func (sc spannedCab) bytes() ([]byte, error) {
+	if sc.writeTo != nil {
+		var b bytes.Buffer
+		if err := sc.writeTo(&b); err != nil {
+			return nil, err
+		}
+		return b.Bytes(), nil
+	}
+	return sc.data, nil
 }
 
 // cabMemRange is one member's global uncompressed byte range in the logical folder.
@@ -63,8 +80,9 @@ func buildMSICabSpanned(members []msiCabMember, maxUncompressedPerCab int64, nam
 		if m.name == "" {
 			return nil, fmt.Errorf("msi cab span: empty member name")
 		}
-		ranges[i] = cabMemRange{m: m, start: total, end: total + int64(len(m.data))}
-		total += int64(len(m.data))
+		sz := m.src.Size()
+		ranges[i] = cabMemRange{m: m, start: total, end: total + sz}
+		total += sz
 	}
 
 	// Number of 32 KiB blocks for the whole folder, then number of physical cabs.
@@ -117,16 +135,7 @@ func buildMSICabSpanned(members []msiCabMember, maxUncompressedPerCab int64, nam
 			if r.start > cabStart {
 				uoff = r.start - cabStart
 			}
-			files = append(files, cabSpanFile{name: r.m.name, cbFile: uint32(len(r.m.data)), uoff: uint32(uoff), iFolder: ifold})
-		}
-
-		// CFDATA region for this cab: blocks [blockLo, blockHi) of the global
-		// concatenation. Build by feeding the relevant byte range through the
-		// same framing as buildMSICabDataRegion (block-aligned, so no mid-block
-		// split).
-		region, blocks, err := buildSpannedDataRegion(ranges, cabStart, cabEnd)
-		if err != nil {
-			return nil, err
+			files = append(files, cabSpanFile{name: r.m.name, cbFile: uint32(r.m.src.Size()), uoff: uint32(uoff), iFolder: ifold})
 		}
 
 		// Header strings + flags.
@@ -141,70 +150,146 @@ func buildMSICabSpanned(members []msiCabMember, maxUncompressedPerCab int64, nam
 			szNext = names[ci+1]
 		}
 
-		cab, err := assembleSpannedCab(files, region, blocks, flags, setID, uint16(ci), szPrev, szNext)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, spannedCab{name: names[ci], data: cab})
+		// Capture this physical cabinet's plan; the bytes are produced lazily and
+		// streamed into whatever sink consumes the stream (CFB writer / hasher).
+		filesC, flagsC, iCab, prevC, nextC := files, flags, uint16(ci), szPrev, szNext
+		csC, ceC := cabStart, cabEnd
+		out = append(out, spannedCab{
+			name: names[ci],
+			writeTo: func(w io.Writer) error {
+				return streamSpannedCab(w, filesC, ranges, csC, ceC, flagsC, setID, iCab, prevC, nextC, newFileCabStage)
+			},
+		})
 	}
 	return out, nil
 }
 
-// buildSpannedDataRegion frames the global byte range [lo, hi) (block-aligned at
-// lo) into CFDATA records, reading from the member ranges without materializing
-// the whole concatenation.
-func buildSpannedDataRegion(ranges []cabMemRange, lo, hi int64) ([]byte, int, error) {
-	read := func(at int64, n int) []byte {
-		buf := make([]byte, 0, n)
-		for _, r := range ranges {
-			if at >= r.end {
-				continue
-			}
-			if at < r.start {
-				break
-			}
-			off := at - r.start
-			avail := int64(len(r.m.data)) - off
-			take := int64(n) - int64(len(buf))
-			if take > avail {
-				take = avail
-			}
-			buf = append(buf, r.m.data[off:off+take]...)
-			at += take
-			if len(buf) >= n {
-				break
-			}
-		}
-		return buf
-	}
+// spannedRangeReader yields the global uncompressed byte range [lo, hi) of the
+// logical folder by opening only the member sources that overlap it, one at a
+// time — the streaming analogue of buildSpannedDataRegion's read closure.
+type spannedRangeReader struct {
+	ranges []cabMemRange
+	pos    int64
+	hi     int64
+	i      int
+	cur    io.ReadCloser
+}
 
-	var out bytes.Buffer
+func newSpannedRangeReader(ranges []cabMemRange, lo, hi int64) *spannedRangeReader {
+	return &spannedRangeReader{ranges: ranges, pos: lo, hi: hi}
+}
+
+func (r *spannedRangeReader) Read(p []byte) (int, error) {
+	for {
+		if r.pos >= r.hi {
+			return 0, io.EOF
+		}
+		if r.cur == nil {
+			for r.i < len(r.ranges) && r.ranges[r.i].end <= r.pos {
+				r.i++
+			}
+			if r.i >= len(r.ranges) || r.pos < r.ranges[r.i].start {
+				return 0, io.EOF
+			}
+			rc, err := r.ranges[r.i].m.src.Open()
+			if err != nil {
+				return 0, fmt.Errorf("msi cab span: opening member %s: %w", r.ranges[r.i].m.name, err)
+			}
+			if skip := r.pos - r.ranges[r.i].start; skip > 0 {
+				if _, err := io.CopyN(io.Discard, rc, skip); err != nil {
+					rc.Close()
+					return 0, err
+				}
+			}
+			r.cur = rc
+		}
+		rng := r.ranges[r.i]
+		lim := int64(len(p))
+		if rem := rng.end - r.pos; lim > rem {
+			lim = rem
+		}
+		if rem := r.hi - r.pos; lim > rem {
+			lim = rem
+		}
+		n, err := r.cur.Read(p[:lim])
+		if n > 0 {
+			r.pos += int64(n)
+			if r.pos >= rng.end {
+				r.cur.Close()
+				r.cur = nil
+				r.i++
+			}
+			return n, nil
+		}
+		if err == io.EOF {
+			r.cur.Close()
+			r.cur = nil
+			r.i++
+			continue
+		}
+		if err != nil {
+			r.cur.Close()
+			r.cur = nil
+			return 0, err
+		}
+	}
+}
+
+func (r *spannedRangeReader) Close() error {
+	if r.cur != nil {
+		err := r.cur.Close()
+		r.cur = nil
+		return err
+	}
+	return nil
+}
+
+// streamSpannedDataRegion frames the global byte range [lo, hi) (block-aligned at
+// lo) into CFDATA records written to w, reading from the member ranges via a
+// range-limited streaming reader (no materialization). Returns the region byte
+// length and block count. Byte-identical to buildSpannedDataRegion.
+func streamSpannedDataRegion(w io.Writer, ranges []cabMemRange, lo, hi int64) (int64, int, error) {
+	src := newSpannedRangeReader(ranges, lo, hi)
+	defer src.Close()
+
+	frame := make([]byte, msiCabBlockSize)
+	var regionLen int64
 	blocks := 0
 	for pos := lo; pos < hi; pos += msiCabBlockSize {
 		n := int(msiCabBlockSize)
 		if pos+int64(n) > hi {
 			n = int(hi - pos)
 		}
-		frame := read(pos, n)
-		ab, err := msiMSZIPBlock(frame)
+		if _, err := io.ReadFull(src, frame[:n]); err != nil {
+			return 0, 0, fmt.Errorf("msi cab span: reading member data: %w", err)
+		}
+		ab, err := msiMSZIPBlock(frame[:n])
 		if err != nil {
-			return nil, 0, err
+			return 0, 0, err
 		}
 		var hdr [4]byte
 		binary.LittleEndian.PutUint16(hdr[0:], uint16(len(ab)))
-		binary.LittleEndian.PutUint16(hdr[2:], uint16(len(frame)))
+		binary.LittleEndian.PutUint16(hdr[2:], uint16(n))
 		csum := cabChecksum(hdr[:], cabChecksum(ab, 0))
-		binary.Write(&out, binary.LittleEndian, csum)
-		out.Write(hdr[:])
-		out.Write(ab)
+		var rec [8]byte
+		binary.LittleEndian.PutUint32(rec[0:], csum)
+		copy(rec[4:], hdr[:])
+		if _, err := w.Write(rec[:]); err != nil {
+			return 0, 0, err
+		}
+		if _, err := w.Write(ab); err != nil {
+			return 0, 0, err
+		}
+		regionLen += int64(8 + len(ab))
 		blocks++
 	}
-	return out.Bytes(), blocks, nil
+	return regionLen, blocks, nil
 }
 
-// assembleSpannedCab writes one physical cabinet (single folder) with the given
-// CFFILE entries, CFDATA region, header flags and PREV/NEXT names.
-func assembleSpannedCab(files []cabSpanFile, region []byte, blocks int, flags, setID, iCabinet uint16, szPrev, szNext string) ([]byte, error) {
+// streamSpannedCab writes one physical cabinet (single folder) into dst, staging
+// the compressed CFDATA region via newStage so cbCabinet is known before the
+// CFHEADER is emitted. Byte-identical to the historical assembleSpannedCab.
+func streamSpannedCab(dst io.Writer, files []cabSpanFile, ranges []cabMemRange, cabStart, cabEnd int64, flags, setID, iCabinet uint16, szPrev, szNext string, newStage func() (cabStage, error)) error {
 	// Reserve-area is absent; PREV/NEXT strings (if any) follow the fixed header.
 	var prevBytes, nextBytes []byte
 	if flags&cabFlagPrevCabinet != 0 {
@@ -221,47 +306,68 @@ func assembleSpannedCab(files []cabSpanFile, region []byte, blocks int, flags, s
 	}
 	coffFiles := uint32(cabHeaderSize + hdrExtra + cabFolderSize)
 	coffData := coffFiles + filesSection
-	cbCabinet := uint64(coffData) + uint64(len(region))
-	if cbCabinet > 0x7FFFFFFF {
-		return nil, fmt.Errorf("msi cab span: physical cabinet size %d exceeds the format limit", cbCabinet)
+
+	stage, err := newStage()
+	if err != nil {
+		return err
+	}
+	defer stage.cleanup()
+	regionLen, blocks, err := streamSpannedDataRegion(stage, ranges, cabStart, cabEnd)
+	if err != nil {
+		return err
 	}
 
-	buf := bytes.NewBuffer(make([]byte, 0, cbCabinet))
+	cbCabinet := uint64(coffData) + uint64(regionLen)
+	if cbCabinet > 0x7FFFFFFF {
+		return fmt.Errorf("msi cab span: physical cabinet size %d exceeds the format limit", cbCabinet)
+	}
+
+	var buf bytes.Buffer
 	buf.WriteString("MSCF")
-	binary.Write(buf, binary.LittleEndian, uint32(0))
-	binary.Write(buf, binary.LittleEndian, uint32(cbCabinet))
-	binary.Write(buf, binary.LittleEndian, uint32(0))
-	binary.Write(buf, binary.LittleEndian, coffFiles)
-	binary.Write(buf, binary.LittleEndian, uint32(0))
+	binary.Write(&buf, binary.LittleEndian, uint32(0))
+	binary.Write(&buf, binary.LittleEndian, uint32(cbCabinet))
+	binary.Write(&buf, binary.LittleEndian, uint32(0))
+	binary.Write(&buf, binary.LittleEndian, coffFiles)
+	binary.Write(&buf, binary.LittleEndian, uint32(0))
 	buf.WriteByte(3)
 	buf.WriteByte(1)
-	binary.Write(buf, binary.LittleEndian, uint16(1)) // cFolders (one per physical cab)
-	binary.Write(buf, binary.LittleEndian, uint16(len(files)))
-	binary.Write(buf, binary.LittleEndian, flags)
-	binary.Write(buf, binary.LittleEndian, setID)
-	binary.Write(buf, binary.LittleEndian, iCabinet)
+	binary.Write(&buf, binary.LittleEndian, uint16(1)) // cFolders (one per physical cab)
+	binary.Write(&buf, binary.LittleEndian, uint16(len(files)))
+	binary.Write(&buf, binary.LittleEndian, flags)
+	binary.Write(&buf, binary.LittleEndian, setID)
+	binary.Write(&buf, binary.LittleEndian, iCabinet)
 	buf.Write(prevBytes)
 	buf.Write(nextBytes)
 
 	// CFFOLDER
-	binary.Write(buf, binary.LittleEndian, coffData)
-	binary.Write(buf, binary.LittleEndian, uint16(blocks))
-	binary.Write(buf, binary.LittleEndian, uint16(cabCompMSZIP))
+	binary.Write(&buf, binary.LittleEndian, coffData)
+	binary.Write(&buf, binary.LittleEndian, uint16(blocks))
+	binary.Write(&buf, binary.LittleEndian, uint16(cabCompMSZIP))
 
 	// CFFILE entries
 	for _, f := range files {
-		binary.Write(buf, binary.LittleEndian, f.cbFile)
-		binary.Write(buf, binary.LittleEndian, f.uoff)
-		binary.Write(buf, binary.LittleEndian, f.iFolder)
-		binary.Write(buf, binary.LittleEndian, uint16(cabDosDate))
-		binary.Write(buf, binary.LittleEndian, uint16(cabDosTime))
-		binary.Write(buf, binary.LittleEndian, uint16(cabAttrArchive))
+		binary.Write(&buf, binary.LittleEndian, f.cbFile)
+		binary.Write(&buf, binary.LittleEndian, f.uoff)
+		binary.Write(&buf, binary.LittleEndian, f.iFolder)
+		binary.Write(&buf, binary.LittleEndian, uint16(cabDosDate))
+		binary.Write(&buf, binary.LittleEndian, uint16(cabDosTime))
+		binary.Write(&buf, binary.LittleEndian, uint16(cabAttrArchive))
 		buf.WriteString(f.name)
 		buf.WriteByte(0)
 	}
 
-	buf.Write(region)
-	return buf.Bytes(), nil
+	if _, err := dst.Write(buf.Bytes()); err != nil {
+		return err
+	}
+
+	r, err := stage.reader()
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, r); err != nil {
+		return err
+	}
+	return nil
 }
 
 // parseMSISpannedSet reassembles a spanned cabinet set (ordered by iCabinet)
@@ -283,7 +389,10 @@ func parseMSISpannedSet(cabs []spannedCab) (map[string][]byte, error) {
 
 	var stream []byte
 	for ci, sc := range cabs {
-		data := sc.data
+		data, err := sc.bytes()
+		if err != nil {
+			return nil, fmt.Errorf("msi cab span: cab %d bytes: %w", ci, err)
+		}
 		if len(data) < cabHeaderSize+cabFolderSize || !bytes.Equal(data[0:4], []byte("MSCF")) {
 			return nil, fmt.Errorf("msi cab span: cab %d is not MSCF", ci)
 		}
@@ -363,32 +472,6 @@ func parseMSISpannedSet(cabs []spannedCab) (map[string][]byte, error) {
 		out[name] = append([]byte(nil), stream[fi.globalUoff:end]...)
 	}
 	return out, nil
-}
-
-// getSpanNextName extracts szCabinetNext from a spanned cabinet header (after
-// the fixed header and any szCabinetPrev/szDiskPrev strings), reporting whether
-// the NEXT flag is set.
-func getSpanNextName(data []byte) (string, bool) {
-	if len(data) < cabHeaderSize {
-		return "", false
-	}
-	flags := binary.LittleEndian.Uint16(data[30:])
-	if flags&cabFlagNextCabinet == 0 {
-		return "", false
-	}
-	pos := int64(cabHeaderSize)
-	if flags&cabFlagPrevCabinet != 0 {
-		adv, err := skipTwoCStrings(data, pos)
-		if err != nil {
-			return "", false
-		}
-		pos += adv
-	}
-	end := bytes.IndexByte(data[pos:], 0)
-	if end < 0 {
-		return "", false
-	}
-	return string(data[pos : pos+int64(end)]), true
 }
 
 // skipTwoCStrings returns the byte length of two consecutive NUL-terminated

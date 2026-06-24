@@ -21,7 +21,7 @@ func TestShortcut_InDirectory_PlacesAndCreatesStandardFolder(t *testing.T) {
 		WithManufacturer("go-msix").
 		WithVersion("1.0.0")
 	c := b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F")
-	c.WithFile("app.exe", []byte("MZ"))
+	c.WithFile("app.exe", FileSourceFromBytes([]byte("MZ")))
 	c.Shortcut("App.lnk", "[#app.exe]").
 		InDirectory("ProgramMenuFolder").
 		Description("Launch App")

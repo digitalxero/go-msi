@@ -56,6 +56,15 @@ func TestMSIStreamNameOrder(t *testing.T) {
 	assert.NotEqual(t, lessMSIStreamName("x", "y"), lessMSIStreamName("y", "x"))
 }
 
+// mustImprint computes the imprint and fails the test on error (the streamed
+// content branch can error; the flat data-only test streams never do).
+func mustImprint(t *testing.T, streams []msiStream, clsid [16]byte, h crypto.Hash) []byte {
+	t.Helper()
+	out, err := computeMSIImprint(streams, clsid, h)
+	require.NoError(t, err)
+	return out
+}
+
 func TestComputeMSIImprint_DeterministicAndExcludesSignature(t *testing.T) {
 	clsid := msiRootCLSID
 	streams := []msiStream{
@@ -64,14 +73,14 @@ func TestComputeMSIImprint_DeterministicAndExcludesSignature(t *testing.T) {
 		{name: "䡀File", data: []byte("table-file-bytes")},
 	}
 
-	a := computeMSIImprint(streams, clsid, crypto.SHA256)
-	b := computeMSIImprint(streams, clsid, crypto.SHA256)
+	a := mustImprint(t, streams, clsid, crypto.SHA256)
+	b := mustImprint(t, streams, clsid, crypto.SHA256)
 	require.Len(t, a, 32)
 	assert.Equal(t, a, b, "imprint is deterministic")
 
 	// Order of the input slice must not matter (sorted internally).
 	shuffled := []msiStream{streams[2], streams[0], streams[1]}
-	assert.Equal(t, a, computeMSIImprint(shuffled, clsid, crypto.SHA256), "imprint independent of input order")
+	assert.Equal(t, a, mustImprint(t, shuffled, clsid, crypto.SHA256), "imprint independent of input order")
 
 	// Adding the signature streams must NOT change the imprint (excluded).
 	withSig := append([]msiStream(nil), streams...)
@@ -79,22 +88,22 @@ func TestComputeMSIImprint_DeterministicAndExcludesSignature(t *testing.T) {
 		msiStream{name: msiSignatureStreamName, data: []byte("the-signature-blob")},
 		msiStream{name: msiSignatureExStreamName, data: []byte("dse")},
 	)
-	assert.Equal(t, a, computeMSIImprint(withSig, clsid, crypto.SHA256),
+	assert.Equal(t, a, mustImprint(t, withSig, clsid, crypto.SHA256),
 		"signature streams are excluded from the imprint")
 
 	// Changing a real stream's content DOES change the imprint.
 	mutated := append([]msiStream(nil), streams...)
 	mutated[0] = msiStream{name: "䡀Property", data: []byte("table-property-bytesX")}
-	assert.NotEqual(t, a, computeMSIImprint(mutated, clsid, crypto.SHA256))
+	assert.NotEqual(t, a, mustImprint(t, mutated, clsid, crypto.SHA256))
 
 	// Changing the root CLSID changes the imprint.
 	other := clsid
 	other[0] ^= 0xFF
-	assert.NotEqual(t, a, computeMSIImprint(streams, other, crypto.SHA256))
+	assert.NotEqual(t, a, mustImprint(t, streams, other, crypto.SHA256))
 }
 
 func TestMSISignedData_RoundTrip(t *testing.T) {
-	imprint := computeMSIImprint([]msiStream{{name: "a", data: []byte("data")}}, msiRootCLSID, crypto.SHA256)
+	imprint := mustImprint(t, []msiStream{{name: "a", data: []byte("data")}}, msiRootCLSID, crypto.SHA256)
 
 	for _, tc := range []struct {
 		name string
@@ -175,8 +184,10 @@ func TestSignMSI_SignatureStreamPresent(t *testing.T) {
 		if sign {
 			b = b.WithSigner(signer)
 		}
-		b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-			WithFile("a.exe", []byte("MZ"))
+		b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+			"a.exe", FileSourceFromBytes(
+				[]byte("MZ")))
+
 		b.Feature("F").WithLevel(1)
 		pkg, err := b.Build()
 		require.NoError(t, err)
@@ -208,8 +219,10 @@ func TestVerifyMSI_TamperDetection(t *testing.T) {
 	require.NoError(t, err)
 	b := NewPackage().WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
 		WithProductName("Tamper").WithManufacturer("go-msix").WithVersion("1.0.0").WithSigner(signer)
-	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		WithFile("a.exe", []byte("MZ original"))
+	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ original")))
+
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)
@@ -248,7 +261,7 @@ func signWith(t *testing.T, cert *x509.Certificate, key crypto.Signer) []byte {
 	require.NoError(t, err)
 	b := NewPackage().WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
 		WithProductName("X").WithManufacturer("go-msix").WithVersion("1.0.0").WithSigner(signer)
-	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile("a.exe", FileSourceFromBytes([]byte("MZ")))
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)
@@ -284,7 +297,7 @@ func TestSignMSI_Timestamped(t *testing.T) {
 
 	b := NewPackage().WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
 		WithProductName("TS").WithManufacturer("go-msix").WithVersion("1.0.0").WithSigner(signer)
-	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile("a.exe", FileSourceFromBytes([]byte("MZ")))
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)
@@ -305,7 +318,7 @@ func TestSignMSI_TimestampUnreachableFails(t *testing.T) {
 	require.NoError(t, err)
 	b := NewPackage().WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
 		WithProductName("TS2").WithManufacturer("go-msix").WithVersion("1.0.0").WithSigner(signer)
-	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile("a.exe", []byte("MZ"))
+	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile("a.exe", FileSourceFromBytes([]byte("MZ")))
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)

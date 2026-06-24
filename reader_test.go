@@ -92,7 +92,7 @@ func buildRTMSI(t *testing.T) []byte {
 	files := rtTestFiles()
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
 	for _, f := range files {
-		c.WithFile(path.Base(f.path), f.data)
+		c.WithFile(path.Base(f.path), FileSourceFromBytes(f.data))
 	}
 	b.Feature("MainFeature").
 		WithTitle("Main Feature").
@@ -153,7 +153,7 @@ func buildRTExpectedDB(t *testing.T) msiDatabase {
 	db.AssociateComponentToFeature("MainFeature", "MainComponent")
 
 	for i, f := range staged {
-		db.WithFile("MainComponent", f.id, f.fileName, f.data, "", int16(i+1))
+		db.WithFileSource("MainComponent", f.id, f.fileName, FileSourceFromBytes(f.data), "", int16(i+1))
 	}
 	db.WithMedia(1, int16(len(staged)), "#"+msiCabinetStreamName)
 
@@ -305,8 +305,8 @@ func TestReadMSIDatabase_RoundTrip(t *testing.T) {
 
 	// Cabinet payloads: same keys (File table primary keys) and identical
 	// bytes, including the multi-frame 70KiB zeros payload.
-	wantFiles := expectedDB.FileContents()
-	gotFiles := readDB.FileContents()
+	wantFiles := drainFileSources(t, expectedDB.FileSources())
+	gotFiles := drainFileSources(t, readDB.FileSources())
 	require.Len(t, gotFiles, len(wantFiles))
 	for id, wantData := range wantFiles {
 		gotData, ok := gotFiles[id]
@@ -344,7 +344,7 @@ func TestReadMSIDatabase_EmptyTablesRoundTrip(t *testing.T) {
 		}
 		assert.Empty(t, tbl.rows(), "table %s should round-trip with zero rows", name)
 	}
-	assert.Empty(t, readDB.FileContents())
+	assert.Empty(t, readDB.FileSources())
 }
 
 // TestReadMSIDatabase_IconBinaryRoundTrip proves the reader decodes binary/

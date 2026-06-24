@@ -40,8 +40,8 @@ func main() {
 		// P7: split the payload across two embedded cabinets (the 70KB dll lands
 		// in its own cab) so the harness exercises the multi-cab path.
 		WithCabSplitThreshold(50000).
-		Icon("AppIcon", icoBytes).
-		Binary("AppData", binBytes).
+		Icon("AppIcon", msix.FileSourceFromBytes(icoBytes)).
+		Binary("AppData", msix.FileSourceFromBytes(binBytes)).
 		WithProperty("GOMSIX_GREETING", "Welcome")
 
 	install := b.RootDirectory("INSTALLFOLDER", "Go MSIX P3 App")
@@ -49,8 +49,8 @@ func main() {
 
 	// A normal exe plus a long-named dll (forces an 8.3 short|long pair) and an
 	// all-zeros body (exercises the MSZIP degenerate-distance sanitizer).
-	comp.WithFile("app.exe", []byte("MZ fake executable payload for P3 verification"))
-	comp.WithFile("MyLongLibraryName.dll", make([]byte, 70000))
+	comp.WithFile("app.exe", msix.FileSourceFromBytes([]byte("MZ fake executable payload for P3 verification")))
+	comp.WithFile("MyLongLibraryName.dll", msix.FileSourceFromBytes(make([]byte, 70000)))
 
 	// Registry values via the typed key builder (string + a #decimal int).
 	comp.RegistryKey(msix.RegistryRootHKLM, `Software\GoMSIX`).

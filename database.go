@@ -26,7 +26,7 @@ type msiDatabaseBuilder interface {
 	WithProperties(props map[string]string) msiDatabaseBuilder
 	WithDirectory(name, parentName, defaultDir string) msiDatabaseBuilder
 	WithComponent(name, guid, directory string, attributes int16, keyPath any) msiDatabaseBuilder
-	WithFile(component, fileID, fileName string, data []byte, version string, sequence int16) msiDatabaseBuilder
+	WithFileSource(component, fileID, fileName string, src FileSource, version string, sequence int16) msiDatabaseBuilder
 	WithFeature(name, title, description string, display, level int16) msiDatabaseBuilder
 	AssociateComponentToFeature(featureID, componentID string) msiDatabaseBuilder
 	WithSequenceAction(table, action string, condition any, sequence int16) msiDatabaseBuilder
@@ -34,27 +34,27 @@ type msiDatabaseBuilder interface {
 	Build() (msiDatabase, error)
 }
 
-// msiDatabase gives access to the populated tables and file contents.
+// msiDatabase gives access to the populated tables and file payload sources.
 type msiDatabase interface {
 	GetTable(name string) (msiTable, error)
 	// Tables returns all table names in sorted (deterministic) order.
 	Tables() []string
-	// FileContents returns map of fileID -> raw bytes (for CAB staging).
-	// The keys are the IDs used in the File table "File" column.
-	FileContents() map[string][]byte
+	// FileSources returns map of fileID -> re-openable payload source (for CAB
+	// staging). The keys are the IDs used in the File table "File" column.
+	FileSources() map[string]FileSource
 	validate() error
 }
 
 type msiDB struct {
-	tables       map[string]msiTable
-	fileContents map[string][]byte
-	errs         []error
+	tables      map[string]msiTable
+	fileSources map[string]FileSource
+	errs        []error
 }
 
 func newMSIDatabaseBuilder() msiDatabaseBuilder {
 	return &msiDB{
-		tables:       make(map[string]msiTable),
-		fileContents: make(map[string][]byte),
+		tables:      make(map[string]msiTable),
+		fileSources: make(map[string]FileSource),
 	}
 }
 
@@ -134,14 +134,14 @@ func (d *msiDB) WithComponent(name, guid, directory string, attributes int16, ke
 	return d
 }
 
-func (d *msiDB) WithFile(component, fileID, fileName string, data []byte, version string, sequence int16) msiDatabaseBuilder {
+func (d *msiDB) WithFileSource(component, fileID, fileName string, src FileSource, version string, sequence int16) msiDatabaseBuilder {
 	t := d.table(msiFileTableName, createMSIFileTable)
 	var ver any
 	if version != "" {
 		ver = version
 	}
-	d.addRow(t, fileID, component, fileName, int32(len(data)), ver, nil, nil, sequence)
-	d.fileContents[fileID] = append([]byte(nil), data...)
+	d.addRow(t, fileID, component, fileName, int32(src.Size()), ver, nil, nil, sequence)
+	d.fileSources[fileID] = src
 	return d
 }
 
@@ -282,11 +282,11 @@ func (d *msiDB) Tables() []string {
 	return names
 }
 
-func (d *msiDB) FileContents() map[string][]byte {
-	// return copy to avoid mutation
-	out := make(map[string][]byte, len(d.fileContents))
-	for k, v := range d.fileContents {
-		out[k] = append([]byte(nil), v...)
+func (d *msiDB) FileSources() map[string]FileSource {
+	// return a copy of the map to avoid mutation; sources are shared (re-openable).
+	out := make(map[string]FileSource, len(d.fileSources))
+	for k, v := range d.fileSources {
+		out[k] = v
 	}
 	return out
 }

@@ -35,7 +35,7 @@ func buildP4ServicePackage(t *testing.T) msiDatabase {
 
 	comp := b.RootDirectory("INSTALLFOLDER", "P4App").
 		Component("Svc").AssociateToFeature("MainFeature")
-	comp.WithFile("svc.exe", []byte("MZ service host"))
+	comp.WithFile("svc.exe", FileSourceFromBytes([]byte("MZ service host")))
 
 	comp.ServiceInstall("MySvc").
 		WithDisplayName("My Service").
@@ -166,8 +166,12 @@ func TestCompileP4_MajorUpgradeRows(t *testing.T) {
 		Done()
 
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").
-		WithFile("app.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+
+		"app.exe", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -229,8 +233,12 @@ func TestCompileP4_LowLevelUpgradeAndLaunchCondition(t *testing.T) {
 		ActionProperty("OLDVERSIONFOUND")
 
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").
-		WithFile("app.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+
+		"app.exe", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -276,8 +284,12 @@ func TestCompileP4_AppSearchRegistryAndSignature(t *testing.T) {
 		Done()
 
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").
-		WithFile("app.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+
+		"app.exe", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -340,8 +352,12 @@ func TestCompileP4_AppSearchComponentAndDirectory(t *testing.T) {
 		Done()
 
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").
-		WithFile("app.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+
+		"app.exe", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -421,8 +437,12 @@ func TestCompileP4_MajorUpgradeActionsScheduled(t *testing.T) {
 		WithVersion("2.0.0").
 		MajorUpgrade().RemoveAfter("InstallValidate").Done()
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").
-		WithFile("app.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+
+		"app.exe", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -450,8 +470,12 @@ func TestCompileP4_NoConditionalActionsForFilesOnly(t *testing.T) {
 		WithManufacturer("go-msix").
 		WithVersion("1.0.0")
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").
-		WithFile("app.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+
+		"app.exe", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -579,8 +603,12 @@ func TestCompileP4_MajorUpgradeIsICEClean(t *testing.T) {
 		WithVersion("2.0.0").
 		MajorUpgrade().Done()
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").
-		WithFile("app.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+
+		"app.exe", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	// Build runs validate-by-default; success means no error-severity findings.
@@ -599,8 +627,12 @@ func TestCompileP4_NoServiceTablesWhenUnused(t *testing.T) {
 		WithManufacturer("go-msix").
 		WithVersion("1.0.0")
 	b.RootDirectory("INSTALLFOLDER", "App").
-		Component("Main").AssociateToFeature("F").
-		WithFile("app.exe", []byte("MZ"))
+		Component("Main").AssociateToFeature("F").WithFile(
+
+		"app.exe", FileSourceFromBytes(
+
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 
 	pkg, err := b.Build()

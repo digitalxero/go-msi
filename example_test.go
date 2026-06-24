@@ -23,7 +23,7 @@ func buildExamplePackage() msi.Package {
 
 	c := b.RootDirectory("INSTALLFOLDER", "Example App").
 		Component("Main").AssociateToFeature("MainFeature")
-	c.WithFile("app.exe", []byte("MZ example payload"))
+	c.WithFile("app.exe", msi.FileSourceFromBytes([]byte("MZ example payload")))
 	b.Feature("MainFeature").WithTitle("Main Feature").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -120,7 +120,7 @@ func ExampleNewTransform() {
 		WithUpgradeCode("{66666666-7777-8888-9999-AAAAAAAAAAAA}")
 	c := tb.RootDirectory("INSTALLFOLDER", "Example App").
 		Component("Main").AssociateToFeature("MainFeature")
-	c.WithFile("app.exe", []byte("MZ example payload"))
+	c.WithFile("app.exe", msi.FileSourceFromBytes([]byte("MZ example payload")))
 	tb.Feature("MainFeature").WithTitle("Main Feature").WithLevel(1)
 	target, err := tb.Build()
 	if err != nil {
@@ -153,7 +153,7 @@ func ExamplePackageBuilder_withLanguageTransform() {
 		})
 	c := b.RootDirectory("INSTALLFOLDER", "My App").
 		Component("Main").AssociateToFeature("MainFeature")
-	c.WithFile("app.exe", []byte("MZ"))
+	c.WithFile("app.exe", msi.FileSourceFromBytes([]byte("MZ")))
 	b.Feature("MainFeature").WithLevel(1)
 
 	pkg, err := b.Build()
@@ -181,7 +181,7 @@ func ExampleNewPatch() {
 		WithUpgradeCode("{66666666-7777-8888-9999-AAAAAAAAAAAA}")
 	c := ub.RootDirectory("INSTALLFOLDER", "Example App").
 		Component("Main").AssociateToFeature("MainFeature")
-	c.WithFile("app.exe", []byte("MZ example payload v1.0.1 — patched"))
+	c.WithFile("app.exe", msi.FileSourceFromBytes([]byte("MZ example payload v1.0.1 — patched")))
 	ub.Feature("MainFeature").WithTitle("Main Feature").WithLevel(1)
 	upgraded, err := ub.Build()
 	if err != nil {
@@ -225,7 +225,7 @@ func ExampleNewSigner() {
 		WithSigner(signer)
 	c := b.RootDirectory("INSTALLFOLDER", "Signed App").
 		Component("Main").AssociateToFeature("MainFeature")
-	c.WithFile("app.exe", []byte("MZ"))
+	c.WithFile("app.exe", msi.FileSourceFromBytes([]byte("MZ")))
 	b.Feature("MainFeature").WithLevel(1)
 
 	pkg, err := b.Build()

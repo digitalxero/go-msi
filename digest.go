@@ -2,7 +2,9 @@ package msi
 
 import (
 	"crypto"
+	"fmt"
 	"hash"
+	"io"
 	"unicode/utf16"
 )
 
@@ -58,7 +60,7 @@ func lessMSIStreamName(a, b string) bool {
 
 // computeMSIImprint hashes the (flat) MSI's stream contents in MSI name order,
 // then folds in the root storage CLSID. The signature streams are excluded.
-func computeMSIImprint(streams []msiStream, rootCLSID [16]byte, hashAlg crypto.Hash) []byte {
+func computeMSIImprint(streams []msiStream, rootCLSID [16]byte, hashAlg crypto.Hash) ([]byte, error) {
 	return computeMSIImprintWithSubStorages(streams, nil, rootCLSID, hashAlg)
 }
 
@@ -69,29 +71,34 @@ func computeMSIImprint(streams []msiStream, rootCLSID [16]byte, hashAlg crypto.H
 // storage's own 16-byte CLSID is appended after its children. The two signature
 // streams are excluded. With no sub-storages this is byte-identical to the flat
 // form (all stream data in name order, then the root CLSID).
-func computeMSIImprintWithSubStorages(streams []msiStream, subs []msiSubStorage, rootCLSID [16]byte, hashAlg crypto.Hash) []byte {
+func computeMSIImprintWithSubStorages(streams []msiStream, subs []msiSubStorage, rootCLSID [16]byte, hashAlg crypto.Hash) ([]byte, error) {
 	h := hashAlg.New()
-	hashMSIStorage(h, streams, subs, rootCLSID)
-	return h.Sum(nil)
+	if err := hashMSIStorage(h, streams, subs, rootCLSID); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
 }
 
 // msiImprintChild is one ordered child of a storage during imprint hashing:
-// either a stream (data) or a sub-storage (sub).
+// either a stream (data or a streamed writeTo) or a sub-storage (sub).
 type msiImprintChild struct {
-	name string
-	data []byte
-	sub  *msiSubStorage
+	name    string
+	data    []byte
+	writeTo func(io.Writer) error
+	sub     *msiSubStorage
 }
 
 // hashMSIStorage folds one storage's children (in MSI name order) then its CLSID
 // into h. Embedded transform sub-storages do not themselves nest further.
-func hashMSIStorage(h hash.Hash, streams []msiStream, subs []msiSubStorage, clsid [16]byte) {
+// Streamed streams (writeTo != nil, e.g. embedded cabinets) feed the hash the
+// same content bytes they write to the CFB, without buffering them whole.
+func hashMSIStorage(h hash.Hash, streams []msiStream, subs []msiSubStorage, clsid [16]byte) error {
 	children := make([]msiImprintChild, 0, len(streams)+len(subs))
 	for _, s := range streams {
 		if s.name == msiSignatureStreamName || s.name == msiSignatureExStreamName {
 			continue
 		}
-		children = append(children, msiImprintChild{name: s.name, data: s.data})
+		children = append(children, msiImprintChild{name: s.name, data: s.data, writeTo: s.writeTo})
 	}
 	for i := range subs {
 		children = append(children, msiImprintChild{name: subs[i].name, sub: &subs[i]})
@@ -105,11 +112,19 @@ func hashMSIStorage(h hash.Hash, streams []msiStream, subs []msiSubStorage, clsi
 	}
 
 	for _, c := range children {
-		if c.sub != nil {
-			hashMSIStorage(h, c.sub.streams, nil, c.sub.clsid)
-			continue
+		switch {
+		case c.sub != nil:
+			if err := hashMSIStorage(h, c.sub.streams, nil, c.sub.clsid); err != nil {
+				return err
+			}
+		case c.writeTo != nil:
+			if err := c.writeTo(h); err != nil {
+				return fmt.Errorf("msi: hashing stream %q: %w", c.name, err)
+			}
+		default:
+			h.Write(c.data)
 		}
-		h.Write(c.data)
 	}
 	h.Write(clsid[:])
+	return nil
 }

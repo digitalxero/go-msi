@@ -18,8 +18,10 @@ func buildP9LangMSI(t *testing.T, configure func(b PackageBuilder)) ([]byte, msi
 		WithManufacturer("go-msix").
 		WithVersion("1.0.0")
 	configure(b)
-	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		WithFile("a.exe", []byte("MZ"))
+	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)

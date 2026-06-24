@@ -127,7 +127,10 @@ func Verify(r io.ReaderAt) (Signature, error) {
 	// Recompute the imprint over the streams + embedded sub-storages (signature
 	// streams excluded) and confirm it matches the imprint the signature commits
 	// to.
-	recomputed := computeMSIImprintWithSubStorages(streams, subs, msiRootCLSID, parsed.hash)
+	recomputed, err := computeMSIImprintWithSubStorages(streams, subs, msiRootCLSID, parsed.hash)
+	if err != nil {
+		return nil, fmt.Errorf("msi verify: recomputing imprint: %w", err)
+	}
 	if !bytesEqual(recomputed, parsed.imprint) {
 		return nil, fmt.Errorf("msi verify: imprint mismatch — the MSI was modified after signing")
 	}

@@ -87,10 +87,12 @@ type msiPatch struct {
 	subs        []msiSubStorage   // P0 + #P0 transforms (set in P10.3/P10.4)
 }
 
-// patchFileChange is one file the patch delivers (new or content-changed).
+// patchFileChange is one file the patch delivers (new or content-changed). The
+// payload is carried as a re-openable source (streamed from the upgraded MSI's
+// cabinet) so neither version's full file set is ever resident in memory.
 type patchFileChange struct {
 	fileID   string
-	data     []byte
+	source   FileSource
 	isNew    bool
 	sequence int16 // assigned in the patch cab order (base max + 1, …)
 }
@@ -403,8 +405,8 @@ func (p *msiPatch) assertNoKeyRemoval(table string) error {
 // numbers (appended above the base's highest File.Sequence) and the reserved
 // patch cabinet DiskId.
 func (p *msiPatch) computeFileChanges() error {
-	baseContents := p.baseDB.FileContents()
-	upContents := p.upDB.FileContents()
+	baseSrcs := p.baseDB.FileSources()
+	upSrcs := p.upDB.FileSources()
 
 	baseIDs := fileIDSet(p.baseDB)
 
@@ -423,13 +425,23 @@ func (p *msiPatch) computeFileChanges() error {
 	sort.Strings(ids)
 
 	for _, id := range ids {
-		upData := upContents[id]
+		upSrc := upSrcs[id]
+		if upSrc == nil {
+			return fmt.Errorf("msi patch: upgraded File %q has no staged content", id)
+		}
 		if !baseIDs[id] {
-			p.changes = append(p.changes, patchFileChange{fileID: id, data: upData, isNew: true})
+			p.changes = append(p.changes, patchFileChange{fileID: id, source: upSrc, isNew: true})
 			continue
 		}
-		if !bytes.Equal(baseContents[id], upData) {
-			p.changes = append(p.changes, patchFileChange{fileID: id, data: upData, isNew: false})
+		// Stream-compare the base and upgraded payloads one file at a time: a
+		// Size mismatch short-circuits without reading, otherwise the two sources
+		// are read in lockstep. Neither MSI's whole file set is ever resident.
+		differ, err := fileSourcesDiffer(baseSrcs[id], upSrc)
+		if err != nil {
+			return fmt.Errorf("msi patch: comparing File %q: %w", id, err)
+		}
+		if differ {
+			p.changes = append(p.changes, patchFileChange{fileID: id, source: upSrc, isNew: false})
 		}
 	}
 
@@ -471,9 +483,62 @@ const (
 func (p *msiPatch) patchCabMembers() []msiCabMember {
 	members := make([]msiCabMember, 0, len(p.changes))
 	for _, c := range p.changes {
-		members = append(members, msiCabMember{name: c.fileID, data: c.data})
+		members = append(members, msiCabMember{name: c.fileID, src: c.source})
 	}
 	return members
+}
+
+// fileSourcesDiffer reports whether base and up have different content,
+// streaming both: a Size mismatch (or a missing base) short-circuits without
+// reading; equal sizes trigger a lockstep byte comparison.
+func fileSourcesDiffer(base, up FileSource) (bool, error) {
+	if base == nil {
+		return true, nil
+	}
+	if base.Size() != up.Size() {
+		return true, nil
+	}
+	equal, err := sourcesEqualContent(base, up)
+	if err != nil {
+		return false, err
+	}
+	return !equal, nil
+}
+
+// sourcesEqualContent streams two equal-size sources and reports whether their
+// bytes are identical, holding at most one chunk of each in memory.
+func sourcesEqualContent(a, b FileSource) (bool, error) {
+	ra, err := a.Open()
+	if err != nil {
+		return false, err
+	}
+	defer ra.Close()
+	rb, err := b.Open()
+	if err != nil {
+		return false, err
+	}
+	defer rb.Close()
+
+	const chunk = 64 << 10
+	ba := make([]byte, chunk)
+	bb := make([]byte, chunk)
+	for {
+		na, ea := io.ReadFull(ra, ba)
+		nb, eb := io.ReadFull(rb, bb)
+		if na != nb || !bytes.Equal(ba[:na], bb[:nb]) {
+			return false, nil
+		}
+		aEnd := ea == io.EOF || ea == io.ErrUnexpectedEOF
+		if aEnd {
+			return true, nil // equal length (sizes matched) and bytes equal so far
+		}
+		if ea != nil {
+			return false, ea
+		}
+		if eb != nil && eb != io.EOF && eb != io.ErrUnexpectedEOF {
+			return false, eb
+		}
+	}
 }
 
 // buildPatchCab builds the embedded patch cabinet from the staged changes.

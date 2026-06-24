@@ -23,8 +23,10 @@ func p9BasePackage(t *testing.T) *msiPackage {
 		WithProperty("PROPA", "1").
 		WithProperty("PROPB", "2").
 		WithProperty("PROPC", "3")
-	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		WithFile("a.exe", []byte("MZ"))
+	b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	b.Feature("F").WithLevel(1)
 	pkg, err := b.Build()
 	require.NoError(t, err)
@@ -112,8 +114,10 @@ func TestMST_ApplyRoundTrip_Update(t *testing.T) {
 		WithProperty("PROPA", "1").
 		WithProperty("PROPB", "CHANGED").
 		WithProperty("PROPC", "3")
-	tb.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		WithFile("a.exe", []byte("MZ"))
+	tb.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	tb.Feature("F").WithLevel(1)
 	tpkg, err := tb.Build()
 	require.NoError(t, err)
@@ -142,8 +146,10 @@ func TestMST_ApplyRoundTrip_InsertAndDelete(t *testing.T) {
 		WithProperty("PROPA", "1").
 		WithProperty("PROPB", "2").
 		WithProperty("PROPD", "4")
-	tb.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		WithFile("a.exe", []byte("MZ"))
+	tb.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	tb.Feature("F").WithLevel(1)
 	tpkg, err := tb.Build()
 	require.NoError(t, err)
@@ -178,8 +184,10 @@ func TestMST_WriteMST_StructuralShape(t *testing.T) {
 		WithProperty("PROPA", "1").
 		WithProperty("PROPB", "CHANGED").
 		WithProperty("PROPC", "3")
-	tb.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").
-		WithFile("a.exe", []byte("MZ"))
+	tb.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F").WithFile(
+		"a.exe", FileSourceFromBytes(
+			[]byte("MZ")))
+
 	tb.Feature("F").WithLevel(1)
 	tpkg, err := tb.Build()
 	require.NoError(t, err)

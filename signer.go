@@ -133,7 +133,10 @@ func (s *msiSigner) signImprint(imprint []byte) ([]byte, error) {
 // Called from the WriteMSI paths after serialization; the signature stream is
 // excluded from the imprint, so adding it does not change the imprint.
 func msiSignStreams(streams []msiStream, subs []msiSubStorage, signer Signer) ([]msiStream, error) {
-	imprint := computeMSIImprintWithSubStorages(streams, subs, msiRootCLSID, signer.hashAlgorithm())
+	imprint, err := computeMSIImprintWithSubStorages(streams, subs, msiRootCLSID, signer.hashAlgorithm())
+	if err != nil {
+		return nil, err
+	}
 	sig, err := signer.(*msiSigner).signImprint(imprint)
 	if err != nil {
 		return nil, err

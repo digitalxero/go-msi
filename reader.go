@@ -21,8 +21,8 @@ package msi
 //     column-1 cells first, then column-2, ... Row count = stream length /
 //     row byte width; a listed table with no stream has zero rows.
 //  5. Resolve Media rows whose Cabinet value starts with "#" to embedded
-//     cabinet streams and unpack them (single folder, MSZIP) into
-//     FileContents, keyed by cab member name == File table primary key.
+//     cabinet streams and expose each member as a streaming FileSource (decoded
+//     on demand), keyed by cab member name == File table primary key.
 //
 // Column categories cannot be recovered from the type bits (an Identifier
 // and a Formatted column serialize identically), so read-back schemas use
@@ -41,7 +41,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 
 	"github.com/abemedia/go-cfb"
 )
@@ -131,7 +130,7 @@ func readMSIDatabase(r io.ReaderAt) (msiDatabase, error) {
 		tables[name] = tbl
 	}
 
-	fileContents, err := readMSICabContents(tables, dataStreams)
+	fileSources, err := buildMSICabFileSources(tables, dataStreams)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +141,7 @@ func readMSIDatabase(r io.ReaderAt) (msiDatabase, error) {
 	}
 	sort.Strings(names)
 
-	return &msiReadDB{tables: tables, names: names, fileContents: fileContents}, nil
+	return &msiReadDB{tables: tables, names: names, fileSources: fileSources}, nil
 }
 
 // readMSISummaryInfo parses the \x05SummaryInformation property set of the
@@ -172,13 +171,13 @@ func readMSISummaryInfo(r io.ReaderAt) (msiSummaryInfo, error) {
 // streams (pair-packed without the prefix: cabinets, Binary/Icon payloads).
 // \x05-prefixed control streams (SummaryInformation, DigitalSignature) belong
 // to neither class and are skipped.
-func readMSICFBStreams(r io.ReaderAt) (tableStreams, dataStreams map[string][]byte, err error) {
+func readMSICFBStreams(r io.ReaderAt) (tableStreams map[string][]byte, dataStreams map[string]*cfb.Stream, err error) {
 	reader, err := cfb.NewReader(r)
 	if err != nil {
 		return nil, nil, fmt.Errorf("msix: opening msi compound file: %w", err)
 	}
 	tableStreams = make(map[string][]byte)
-	dataStreams = make(map[string][]byte)
+	dataStreams = make(map[string]*cfb.Stream)
 	for _, e := range reader.Entries {
 		st, ok := e.(*cfb.Stream)
 		if !ok {
@@ -188,14 +187,17 @@ func readMSICFBStreams(r io.ReaderAt) (tableStreams, dataStreams map[string][]by
 		if !isTable && name != "" && name[0] == 5 {
 			continue // control stream, read via readMSISummaryInfo et al.
 		}
-		data, err := io.ReadAll(st.Open())
-		if err != nil {
-			return nil, nil, fmt.Errorf("msix: reading stream %q: %w", name, err)
-		}
 		if isTable {
+			// Table streams are small and structural; buffer them eagerly (the
+			// schema/row decode needs them whole). Cabinet/side data streams stay
+			// lazy: their (potentially huge) payload is read on demand via ReadAt.
+			data, err := io.ReadAll(st.Open())
+			if err != nil {
+				return nil, nil, fmt.Errorf("msix: reading stream %q: %w", name, err)
+			}
 			tableStreams[name] = data
 		} else {
-			dataStreams[name] = data
+			dataStreams[name] = st
 		}
 	}
 	return tableStreams, dataStreams, nil
@@ -436,7 +438,7 @@ func decodeMSITableCell(cell []byte, col msiColumn, pool *msiStringPool) (any, e
 // side streams for the Icon and Binary tables. Non-binary tables have no
 // msiColBinary column, so this is a no-op for them (including the system
 // catalog tables _Columns/_Tables, which carry no binary columns).
-func resolveMSIBinaryCells(tableName string, cols []msiColumn, rows [][]any, dataStreams map[string][]byte) error {
+func resolveMSIBinaryCells(tableName string, cols []msiColumn, rows [][]any, dataStreams map[string]*cfb.Stream) error {
 	binIdx := -1
 	for i, col := range cols {
 		if col.typ() == msiColBinary {
@@ -458,82 +460,17 @@ func resolveMSIBinaryCells(tableName string, cols []msiColumn, rows [][]any, dat
 			return fmt.Errorf("msix: table %s row %d has a binary cell but a NULL/non-string Name key, cannot resolve its side stream", tableName, ri)
 		}
 		streamName := tableName + "." + key
-		payload, ok := dataStreams[streamName]
+		st, ok := dataStreams[streamName]
 		if !ok {
 			return fmt.Errorf("msix: table %s row %d (Name=%q) has a present binary cell but no %q side stream", tableName, ri, key, streamName)
 		}
-		vals[binIdx] = append([]byte(nil), payload...)
+		payload, err := io.ReadAll(st.Open())
+		if err != nil {
+			return fmt.Errorf("msix: table %s row %d reading side stream %q: %w", tableName, ri, streamName, err)
+		}
+		vals[binIdx] = payload
 	}
 	return nil
-}
-
-// readMSICabContents unpacks every embedded cabinet referenced from the Media
-// table (Cabinet values of the form "#StreamName") into a map keyed by cab
-// member name, which by MSI rule equals the File table primary key.
-func readMSICabContents(tables map[string]msiTable, dataStreams map[string][]byte) (map[string][]byte, error) {
-	fileContents := make(map[string][]byte)
-	media, ok := tables[msiMediaTableName]
-	if !ok {
-		return fileContents, nil
-	}
-	cabinetIdx := -1
-	for i, col := range media.columns() {
-		if col.name() == "Cabinet" {
-			cabinetIdx = i
-			break
-		}
-	}
-	if cabinetIdx < 0 {
-		return fileContents, nil
-	}
-	for _, row := range media.rows() {
-		vals := row.values()
-		if cabinetIdx >= len(vals) {
-			continue
-		}
-		cabinet, _ := vals[cabinetIdx].(string)
-		if !strings.HasPrefix(cabinet, "#") {
-			continue // NULL or external cabinet file: nothing embedded
-		}
-		streamName := cabinet[1:]
-		cabData, ok := dataStreams[streamName]
-		if !ok {
-			return nil, fmt.Errorf("msix: Media cabinet %q references missing data stream %q", cabinet, streamName)
-		}
-
-		var members map[string][]byte
-		var err error
-		if len(cabData) >= 32 && binary.LittleEndian.Uint16(cabData[30:])&cabFlagNextCabinet != 0 {
-			// Spanned set: gather the physical cabinets via the szCabinetNext chain.
-			set := []spannedCab{{name: streamName, data: cabData}}
-			cur := cabData
-			for {
-				next, has := getSpanNextName(cur)
-				if !has {
-					break
-				}
-				nd, ok := dataStreams[next]
-				if !ok {
-					return nil, fmt.Errorf("msix: spanned cabinet %q references missing continuation stream %q", streamName, next)
-				}
-				set = append(set, spannedCab{name: next, data: nd})
-				cur = nd
-			}
-			members, err = parseMSISpannedSet(set)
-			if err != nil {
-				return nil, fmt.Errorf("msix: spanned cabinet set starting %q: %w", streamName, err)
-			}
-		} else {
-			members, err = parseMSICab(cabData)
-			if err != nil {
-				return nil, fmt.Errorf("msix: cabinet stream %q: %w", streamName, err)
-			}
-		}
-		for name, data := range members {
-			fileContents[name] = data
-		}
-	}
-	return fileContents, nil
 }
 
 // parseMSICab unpacks an MSZIP cabinet (one or more independent CFFOLDERs) into
@@ -691,9 +628,9 @@ func msiInflateMSZIPFrame(ab []byte) ([]byte, error) {
 
 // msiReadDB is the read-only msiDatabase produced by readMSIDatabase.
 type msiReadDB struct {
-	tables       map[string]msiTable
-	names        []string // sorted
-	fileContents map[string][]byte
+	tables      map[string]msiTable
+	names       []string // sorted
+	fileSources map[string]FileSource
 }
 
 func (d *msiReadDB) GetTable(name string) (msiTable, error) {
@@ -708,10 +645,10 @@ func (d *msiReadDB) Tables() []string {
 	return append([]string(nil), d.names...)
 }
 
-func (d *msiReadDB) FileContents() map[string][]byte {
-	out := make(map[string][]byte, len(d.fileContents))
-	for k, v := range d.fileContents {
-		out[k] = append([]byte(nil), v...)
+func (d *msiReadDB) FileSources() map[string]FileSource {
+	out := make(map[string]FileSource, len(d.fileSources))
+	for k, v := range d.fileSources {
+		out[k] = v
 	}
 	return out
 }

@@ -105,7 +105,7 @@ func TestCompileMSIPackage_ComponentsAndFiles(t *testing.T) {
 				id:    "Main",
 				dirID: "INSTALLFOLDER",
 				files: []attachedFile{
-					{name: "app.exe", data: []byte("MZpayload")},
+					{name: "app.exe", src: FileSourceFromBytes([]byte("MZpayload"))},
 				},
 			},
 		},
@@ -124,7 +124,7 @@ func TestCompileMSIPackage_ComponentsAndFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fileTbl.rows(), 1)
 
-	fc := db.FileContents()
+	fc := db.FileSources()
 	require.Len(t, fc, 1, "WithFile inside compile must have staged the payload for the cabinet")
 
 	// Media because we had files
@@ -529,9 +529,22 @@ func (f *fakeDBForTest) GetTable(name string) (msiTable, error) {
 	}
 	return nil, fmt.Errorf("not found")
 }
-func (f *fakeDBForTest) Tables() []string                { return []string{msiInstallExecSeqTableName} }
-func (f *fakeDBForTest) FileContents() map[string][]byte { return nil }
-func (f *fakeDBForTest) validate() error                 { return nil }
+func (f *fakeDBForTest) Tables() []string                   { return []string{msiInstallExecSeqTableName} }
+func (f *fakeDBForTest) FileSources() map[string]FileSource { return nil }
+func (f *fakeDBForTest) validate() error                    { return nil }
+
+// drainFileSources materializes a fileID->FileSource map to fileID->bytes for
+// byte-identity assertions in tests.
+func drainFileSources(t *testing.T, m map[string]FileSource) map[string][]byte {
+	t.Helper()
+	out := make(map[string][]byte, len(m))
+	for k, v := range m {
+		b, err := readAllFromSource(v)
+		require.NoError(t, err, "draining file source %q", k)
+		out[k] = b
+	}
+	return out
+}
 
 // TestMSIPackage_FlatReproParity_rtTestData exercises P1G2-051: construct an
 // equivalent model using the public NewPackage API (plus explicit "flat"
@@ -569,8 +582,8 @@ func TestMSIPackage_FlatReproParity_rtTestData(t *testing.T) {
 	}
 
 	// File contents (cab payload keys = fids) should match.
-	wantFC := expectedDB.FileContents()
-	gotFC := readDB.FileContents()
+	wantFC := drainFileSources(t, expectedDB.FileSources())
+	gotFC := drainFileSources(t, readDB.FileSources())
 	require.Equal(t, wantFC, gotFC, "FileContents (cab members) must match")
 
 	// Determinism: a second build is byte-identical.

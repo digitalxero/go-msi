@@ -60,7 +60,7 @@ func main() {
 		WithSigner(signer)
 	comp := b.RootDirectory("INSTALLFOLDER", "Go MSIX Signed Sample").
 		Component("Main").AssociateToFeature("Main")
-	comp.WithFile("app.exe", []byte("MZ signed sample payload"))
+	comp.WithFile("app.exe", msix.FileSourceFromBytes([]byte("MZ signed sample payload")))
 	b.Feature("Main").WithTitle("Main").WithLevel(1)
 
 	pkg, err := b.Build()

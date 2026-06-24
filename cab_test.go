@@ -66,9 +66,9 @@ func TestBuildMSICAB_RoundTrip(t *testing.T) {
 	}
 
 	cab, err := buildMSICAB([]msiCabMember{
-		{name: "filA", data: payloadA},
-		{name: "filB", data: payloadB},
-		{name: "filC", data: payloadC},
+		{name: "filA", src: FileSourceFromBytes(payloadA)},
+		{name: "filB", src: FileSourceFromBytes(payloadB)},
+		{name: "filC", src: FileSourceFromBytes(payloadC)},
 	})
 	require.NoError(t, err)
 
@@ -97,7 +97,7 @@ func TestBuildMSICAB_Errors(t *testing.T) {
 	_, err := buildMSICAB(nil)
 	assert.Error(t, err, "empty member list must error")
 
-	_, err = buildMSICAB([]msiCabMember{{name: "", data: []byte("x")}})
+	_, err = buildMSICAB([]msiCabMember{{name: "", src: FileSourceFromBytes([]byte("x"))}})
 	assert.Error(t, err, "empty member name must error")
 }
 

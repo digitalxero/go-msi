@@ -23,6 +23,7 @@ package msi
 import (
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
@@ -51,10 +52,15 @@ var msiPatchCLSID = [16]byte{0x86, 0x10, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC
 const msiCabinetStreamName = "cab1.cab"
 
 // msiStream is one named CFB stream ready to be written. name is the final
-// (already encoded) stream name.
+// (already encoded) stream name. Exactly one of data / writeTo is set: small
+// streams (tables, string pools, summary, Icon/Binary side streams) carry their
+// bytes in data; large streamed streams (embedded cabinets) carry writeTo, which
+// emits the content into any sink (the CFB StreamWriter when writing, the hash
+// when computing the Authenticode imprint) without ever buffering it whole.
 type msiStream struct {
-	name string
-	data []byte
+	name    string
+	data    []byte
+	writeTo func(io.Writer) error
 }
 
 // cabBuildOptions carries the P7 cabinet controls into the serializer: how to
@@ -191,7 +197,7 @@ func buildMSICabStreams(db msiDatabase, opts cabBuildOptions) ([]msiStream, erro
 	}
 	var files []fileMember
 	if fileTbl, fErr := db.GetTable(msiFileTableName); fErr == nil {
-		contents := db.FileContents()
+		sources := db.FileSources()
 		for _, r := range fileTbl.rows() {
 			vals := r.values()
 			if len(vals) < 8 {
@@ -199,11 +205,11 @@ func buildMSICabStreams(db msiDatabase, opts cabBuildOptions) ([]msiStream, erro
 			}
 			fileID, _ := vals[0].(string)
 			seq, _ := vals[7].(int16)
-			data, ok := contents[fileID]
+			src, ok := sources[fileID]
 			if !ok {
 				return nil, fmt.Errorf("msi: no staged content for File %q", fileID)
 			}
-			files = append(files, fileMember{seq: seq, member: msiCabMember{name: fileID, data: data}})
+			files = append(files, fileMember{seq: seq, member: msiCabMember{name: fileID, src: src}})
 		}
 		sort.SliceStable(files, func(i, j int) bool { return files[i].seq < files[j].seq })
 	}
@@ -253,11 +259,7 @@ func buildMSICabStreams(db msiDatabase, opts cabBuildOptions) ([]msiStream, erro
 			if opts.externalWriter == nil {
 				return nil, fmt.Errorf("msi: Media cabinet %q is external but no external cab writer was set (WithExternalCabs)", m.cabinet)
 			}
-			cabBytes, bErr := buildCabFromMembers(members, opts)
-			if bErr != nil {
-				return nil, bErr
-			}
-			if wErr := writeExternalCab(opts.externalWriter, logical, cabBytes); wErr != nil {
+			if wErr := writeExternalCab(opts.externalWriter, logical, members, opts); wErr != nil {
 				return nil, wErr
 			}
 			continue
@@ -280,7 +282,7 @@ func buildMSICabStreams(db msiDatabase, opts cabBuildOptions) ([]msiStream, erro
 func embedCab(logicalName string, members []msiCabMember, opts cabBuildOptions) ([]msiStream, error) {
 	var total int64
 	for _, m := range members {
-		total += int64(len(m.data))
+		total += m.src.Size()
 	}
 	if opts.spanCap > 0 && total > opts.spanCap {
 		names := spannedStreamNames(logicalName, members, opts.spanCap)
@@ -293,19 +295,21 @@ func embedCab(logicalName string, members []msiCabMember, opts cabBuildOptions) 
 			if err := validateMSIStreamName(false, sc.name); err != nil {
 				return nil, fmt.Errorf("msi: spanned cabinet stream %q: %w", sc.name, err)
 			}
-			out = append(out, msiStream{name: encodeMSIStreamName(false, sc.name), data: sc.data})
+			out = append(out, msiStream{name: encodeMSIStreamName(false, sc.name), writeTo: sc.writeTo})
 		}
 		return out, nil
 	}
 
-	cabBytes, err := buildCabFromMembers(members, opts)
-	if err != nil {
-		return nil, err
-	}
 	if err := validateMSIStreamName(false, logicalName); err != nil {
 		return nil, fmt.Errorf("msi: cabinet stream %q: %w", logicalName, err)
 	}
-	return []msiStream{{name: encodeMSIStreamName(false, logicalName), data: cabBytes}}, nil
+	folders := cabFoldersFromMembers(members, opts)
+	return []msiStream{{
+		name: encodeMSIStreamName(false, logicalName),
+		writeTo: func(w io.Writer) error {
+			return streamMSICABFolders(w, folders, newFileCabStage)
+		},
+	}}, nil
 }
 
 // spannedStreamNames derives the chain of physical cabinet stream names for a
@@ -313,7 +317,7 @@ func embedCab(logicalName string, members []msiCabMember, opts cabBuildOptions) 
 func spannedStreamNames(base string, members []msiCabMember, cap int64) []string {
 	var total int64
 	for _, m := range members {
-		total += int64(len(m.data))
+		total += m.src.Size()
 	}
 	n := int((total + cap - 1) / cap)
 	if n < 1 {
@@ -328,14 +332,13 @@ func spannedStreamNames(base string, members []msiCabMember, cap int64) []string
 	return names
 }
 
-// buildCabFromMembers builds one cabinet, splitting into CFFOLDERs by the folder
-// threshold (one folder when the threshold is 0 — byte-identical to buildMSICAB).
-func buildCabFromMembers(members []msiCabMember, opts cabBuildOptions) ([]byte, error) {
+// cabFoldersFromMembers groups members into CFFOLDERs by the folder threshold
+// (one folder when the threshold is 0 — byte-identical to buildMSICAB).
+func cabFoldersFromMembers(members []msiCabMember, opts cabBuildOptions) [][]msiCabMember {
 	if opts.folderThreshold <= 0 {
-		return buildMSICAB(members)
+		return [][]msiCabMember{members}
 	}
-	folders := splitMembersIntoFolders(members, opts.folderThreshold)
-	return buildMSICABFolders(folders)
+	return splitMembersIntoFolders(members, opts.folderThreshold)
 }
 
 // splitMembersIntoFolders groups members into folders, starting a new folder
@@ -346,13 +349,13 @@ func splitMembersIntoFolders(members []msiCabMember, threshold int64) [][]msiCab
 	var cur []msiCabMember
 	var curSize int64
 	for _, m := range members {
-		if len(cur) > 0 && curSize+int64(len(m.data)) > threshold {
+		if len(cur) > 0 && curSize+m.src.Size() > threshold {
 			folders = append(folders, cur)
 			cur = nil
 			curSize = 0
 		}
 		cur = append(cur, m)
-		curSize += int64(len(m.data))
+		curSize += m.src.Size()
 	}
 	if len(cur) > 0 {
 		folders = append(folders, cur)
@@ -360,13 +363,16 @@ func splitMembersIntoFolders(members []msiCabMember, threshold int64) [][]msiCab
 	return folders
 }
 
-// writeExternalCab writes cab bytes to the external writer and closes it.
-func writeExternalCab(write func(name string) (io.WriteCloser, error), name string, data []byte) error {
+// writeExternalCab streams a cabinet straight into the external writer and
+// closes it. The external sink need not be seekable: streamMSICABFolders
+// resolves cbCabinet via its own per-folder temp before the first byte is
+// written, so the cabinet is never buffered whole in memory.
+func writeExternalCab(write func(name string) (io.WriteCloser, error), name string, members []msiCabMember, opts cabBuildOptions) error {
 	w, err := write(name)
 	if err != nil {
 		return fmt.Errorf("msi: opening external cabinet %q: %w", name, err)
 	}
-	if _, err := w.Write(data); err != nil {
+	if err := streamMSICABFolders(w, cabFoldersFromMembers(members, opts), newFileCabStage); err != nil {
 		w.Close()
 		return fmt.Errorf("msi: writing external cabinet %q: %w", name, err)
 	}
@@ -380,7 +386,7 @@ func msiCabMembers(db msiDatabase) ([]msiCabMember, error) {
 	if err != nil {
 		return nil, nil // no File table at all -> no cab
 	}
-	contents := db.FileContents()
+	sources := db.FileSources()
 
 	type seqMember struct {
 		seq    int16
@@ -394,11 +400,11 @@ func msiCabMembers(db msiDatabase) ([]msiCabMember, error) {
 		}
 		fileID, _ := vals[0].(string)
 		seq, _ := vals[7].(int16)
-		data, ok := contents[fileID]
+		src, ok := sources[fileID]
 		if !ok {
 			return nil, fmt.Errorf("msi: no staged content for File %q", fileID)
 		}
-		entries = append(entries, seqMember{seq: seq, member: msiCabMember{name: fileID, data: data}})
+		entries = append(entries, seqMember{seq: seq, member: msiCabMember{name: fileID, src: src}})
 	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].seq < entries[j].seq })
 
@@ -460,14 +466,69 @@ func writeMSICFBWithSubStorages(streams []msiStream, subs []msiSubStorage, clsid
 	return nil
 }
 
+// realizeStreamedCabStreams materializes every streamed stream (writeTo != nil)
+// to its own temp file once, replacing writeTo with one that replays the temp.
+// It is used before signing so each cabinet is compressed once and then re-read
+// for both the imprint hash and the CFB write, rather than recompressed per
+// pass. The returned cleanup removes the temps and must run after the CFB write.
+func realizeStreamedCabStreams(streams []msiStream) ([]msiStream, func(), error) {
+	var temps []string
+	cleanup := func() {
+		for _, n := range temps {
+			os.Remove(n)
+		}
+	}
+	out := make([]msiStream, len(streams))
+	copy(out, streams)
+	for i := range out {
+		if out[i].writeTo == nil {
+			continue
+		}
+		f, err := os.CreateTemp("", "go-msix-cabstream-*")
+		if err != nil {
+			cleanup()
+			return nil, func() {}, err
+		}
+		temps = append(temps, f.Name())
+		if err := out[i].writeTo(f); err != nil {
+			f.Close()
+			cleanup()
+			return nil, func() {}, err
+		}
+		if err := f.Close(); err != nil {
+			cleanup()
+			return nil, func() {}, err
+		}
+		name := f.Name()
+		out[i].writeTo = func(w io.Writer) error {
+			rf, err := os.Open(name)
+			if err != nil {
+				return err
+			}
+			defer rf.Close()
+			_, err = io.Copy(w, rf)
+			return err
+		}
+	}
+	return out, cleanup, nil
+}
+
 // writeMSIStreamsInto creates and fills each stream under the given storage.
+// Streamed streams (writeTo != nil, e.g. embedded cabinets) are emitted directly
+// into the CFB StreamWriter — which flushes per sector — so the payload is never
+// buffered whole; small streams write their in-memory bytes as before.
 func writeMSIStreamsInto(sw *cfb.StorageWriter, streams []msiStream) error {
 	for _, s := range streams {
 		st, err := sw.CreateStream(s.name)
 		if err != nil {
 			return fmt.Errorf("msi: create stream %q: %w", s.name, err)
 		}
-		if _, err := st.Write(s.data); err != nil {
+		if s.writeTo != nil {
+			if err := s.writeTo(st); err != nil {
+				st.Close()
+				return fmt.Errorf("msi: write stream %q: %w", s.name, err)
+			}
+		} else if _, err := st.Write(s.data); err != nil {
 			st.Close()
 			return fmt.Errorf("msi: write stream %q: %w", s.name, err)
 		}
