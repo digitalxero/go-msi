@@ -183,26 +183,62 @@ func platformComponentAttrs(t *testing.T, db msiDatabase, comp string) int16 {
 	return iceInt16(findRow(t, tbl, 0, comp)[3])
 }
 
-func TestPlatform64BitConventionsApplied(t *testing.T) {
+func TestPlatform64BitComponentAttributeApplied(t *testing.T) {
 	for _, tc := range []struct {
-		plat       Platform
-		wantParent string
-		want64Bit  bool
+		plat      Platform
+		want64Bit bool
 	}{
-		{Platform_Intel, "ProgramFilesFolder", false},
-		{Platform_Arm, "ProgramFilesFolder", false},
-		{Platform_x64, "ProgramFiles64Folder", true},
-		{Platform_Intel64, "ProgramFiles64Folder", true},
-		{Platform_Arm64, "ProgramFiles64Folder", true},
+		{Platform_Intel, false},
+		{Platform_Arm, false},
+		{Platform_x64, true},
+		{Platform_Intel64, true},
+		{Platform_Arm64, true},
 	} {
 		t.Run(tc.plat.String(), func(t *testing.T) {
 			_, db := buildPlatformMSI(t, func(b PackageBuilder) { b.WithPlatform(tc.plat) })
-
-			assert.Equal(t, tc.wantParent, platformDirParent(t, db, "INSTALLFOLDER"),
-				"install root hangs off the platform's Program Files folder")
-
 			got64 := platformComponentAttrs(t, db, "Main")&msidbComponentAttributes64bit != 0
 			assert.Equal(t, tc.want64Bit, got64, "component 64-bit attribute")
+		})
+	}
+}
+
+func TestInstallRootDefaultsToTargetDir(t *testing.T) {
+	// The install root must stay under TARGETDIR by default, or
+	// "msiexec TARGETDIR=…" silently stops redirecting the install.
+	for _, plat := range []Platform{Platform_Intel, Platform_x64, Platform_Arm64} {
+		t.Run(plat.String(), func(t *testing.T) {
+			_, db := buildPlatformMSI(t, func(b PackageBuilder) { b.WithPlatform(plat) })
+			assert.Equal(t, "TARGETDIR", platformDirParent(t, db, "INSTALLFOLDER"))
+
+			tbl, err := db.GetTable("Directory")
+			require.NoError(t, err)
+			for _, r := range tbl.rows() {
+				dir, _ := r.values()[0].(string)
+				assert.NotContains(t, []string{"ProgramFilesFolder", "ProgramFiles64Folder"}, dir,
+					"no Program Files folder without InstallToProgramFiles")
+			}
+		})
+	}
+}
+
+func TestInstallToProgramFilesPicksPlatformFolder(t *testing.T) {
+	for _, tc := range []struct {
+		plat       Platform
+		wantParent string
+	}{
+		{Platform_Intel, "ProgramFilesFolder"},
+		{Platform_Arm, "ProgramFilesFolder"},
+		{Platform_x64, "ProgramFiles64Folder"},
+		{Platform_Intel64, "ProgramFiles64Folder"},
+		{Platform_Arm64, "ProgramFiles64Folder"},
+	} {
+		t.Run(tc.plat.String(), func(t *testing.T) {
+			_, db := buildPlatformMSI(t, func(b PackageBuilder) {
+				b.WithPlatform(tc.plat).InstallToProgramFiles()
+			})
+			assert.Equal(t, tc.wantParent, platformDirParent(t, db, "INSTALLFOLDER"))
+			assert.Equal(t, "TARGETDIR", platformDirParent(t, db, tc.wantParent),
+				"the Program Files folder itself is rooted at TARGETDIR")
 		})
 	}
 }
@@ -220,9 +256,10 @@ func TestExplicitAttributesSuppressAuto64Bit(t *testing.T) {
 }
 
 func TestExplicitInstallParentSuppressesProgramFiles(t *testing.T) {
-	// A caller that wired INSTALLFOLDER's parent itself keeps it.
+	// A caller that wired INSTALLFOLDER's parent itself keeps it, even with
+	// InstallToProgramFiles set.
 	_, db := buildPlatformMSI(t, func(b PackageBuilder) {
-		b.WithPlatform(Platform_x64)
+		b.WithPlatform(Platform_x64).InstallToProgramFiles()
 		b.RootDirectory("TARGETDIR", "SourceDir").Subdirectory("INSTALLFOLDER", "App")
 	})
 	assert.Equal(t, "TARGETDIR", platformDirParent(t, db, "INSTALLFOLDER"),
@@ -312,7 +349,9 @@ func TestICE39IgnoresPatchTemplate(t *testing.T) {
 // --- ICE80: 64-bit content must agree with the Template platform ---
 
 func TestICE80FlagsSixtyFourBitContentInThirtyTwoBitPackage(t *testing.T) {
-	_, db := buildPlatformMSI(t, func(b PackageBuilder) { b.WithPlatform(Platform_x64) })
+	_, db := buildPlatformMSI(t, func(b PackageBuilder) {
+		b.WithPlatform(Platform_x64).InstallToProgramFiles()
+	})
 
 	// Re-validate the 64-bit database while claiming a 32-bit Template.
 	findings := runICE80(&iceContext{db: db, summary: msiSummaryInfo{Template: "Intel;1033"}})
@@ -333,7 +372,9 @@ func TestICE80FlagsSixtyFourBitContentInThirtyTwoBitPackage(t *testing.T) {
 func TestICE80PassesForMatchingPlatform(t *testing.T) {
 	for _, plat := range []Platform{Platform_Intel, Platform_x64, Platform_Arm, Platform_Arm64} {
 		t.Run(plat.String(), func(t *testing.T) {
-			_, db := buildPlatformMSI(t, func(b PackageBuilder) { b.WithPlatform(plat) })
+			_, db := buildPlatformMSI(t, func(b PackageBuilder) {
+				b.WithPlatform(plat).InstallToProgramFiles()
+			})
 			findings := runICE80(&iceContext{db: db, summary: msiSummaryInfo{Template: plat.String() + ";1033"}})
 			assert.Empty(t, findings, "a package's own platform must never trip ICE80")
 		})

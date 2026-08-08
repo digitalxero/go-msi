@@ -167,6 +167,23 @@ func (p *msiPackage) WithPlatform(plat Platform) PackageBuilder {
 	return p
 }
 
+// InstallToProgramFiles roots the install directory under the platform's
+// Program Files folder instead of TARGETDIR.
+func (p *msiPackage) InstallToProgramFiles() PackageBuilder {
+	p.installToProgramFiles = true
+	return p
+}
+
+// installRootParent is the directory the install root hangs off: the
+// platform's Program Files folder when the caller opted in, otherwise "" for
+// the TARGETDIR default that keeps "msiexec TARGETDIR=…" working.
+func (p *msiPackage) installRootParent() string {
+	if !p.installToProgramFiles {
+		return ""
+	}
+	return p.platformOrDefault().programFilesFolder()
+}
+
 // platformOrDefault returns the configured platform (Platform_x64 if unset).
 func (p *msiPackage) platformOrDefault() Platform {
 	if p.platform == platformUnset {

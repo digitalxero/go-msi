@@ -63,15 +63,17 @@ func main() {
 		WithManufacturer("My Company").
 		WithVersion("1.0.0").
 		WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
-		WithUpgradeCode("{ABCDEF01-2345-6789-ABCD-EF0123456789}")
+		WithUpgradeCode("{ABCDEF01-2345-6789-ABCD-EF0123456789}").
+		// Root the install under the target platform's Program Files folder.
+		// Without this the install root hangs off TARGETDIR instead.
+		InstallToProgramFiles()
 
 	app, err := msi.FileSourceFromPath("app.exe")
 	if err != nil {
 		panic(err)
 	}
 
-	// The install root is created under the target platform's Program Files
-	// folder, so "My App" resolves to C:\Program Files\My App.
+	// "My App" now resolves to C:\Program Files\My App.
 	c := b.RootDirectory("INSTALLFOLDER", "My App").
 		Component("Main").AssociateToFeature("MainFeature")
 	c.WithFile("app.exe", app)
@@ -109,12 +111,21 @@ msiexec /x {12345678-1234-1234-1234-123456789ABC} /qn /norestart
 
 A per-machine install writes to `C:\Program Files`, so run these from an
 elevated prompt — `/qn` suppresses the UAC prompt along with the rest of the UI,
-and an unelevated silent install fails with error 1925. `INSTALLFOLDER` is a
-public property, so `msiexec /i MyApp.msi /qn INSTALLFOLDER="D:\Apps\My App"`
-overrides the location.
+and an unelevated silent install fails with error 1925.
 
-Because the default platform is `Platform_x64`, the install root hangs off
-`ProgramFiles64Folder` (`C:\Program Files`). A `Platform_Intel` package uses
+To install somewhere else, set `INSTALLFOLDER`:
+
+```powershell
+msiexec /i MyApp.msi /qn INSTALLFOLDER="D:\Apps\My App"
+```
+
+Note that `TARGETDIR=` does **not** redirect a package built with
+`InstallToProgramFiles()` — Windows Installer resolves the Program Files folders
+from the system, not from `TARGETDIR`. Packages that skip the opt-in keep their
+install root under `TARGETDIR` and stay redirectable that way.
+
+Because the default platform is `Platform_x64`, `InstallToProgramFiles()` picks
+`ProgramFiles64Folder` (`C:\Program Files`). A `Platform_Intel` package gets
 `ProgramFilesFolder`, which is `C:\Program Files (x86)` on 64-bit Windows — see
 [Target platform](#target-platform).
 
@@ -158,15 +169,15 @@ The platform also drives:
 - `msidbComponentAttributes64bit` on components of a 64-bit package, so their
   files land in the 64-bit locations and their registry rows bypass WOW6432Node
   redirection;
-- whether the auto-created install root hangs off `ProgramFiles64Folder` or
-  `ProgramFilesFolder`.
+- which Program Files folder `InstallToProgramFiles()` selects —
+  `ProgramFiles64Folder` for 64-bit platforms, `ProgramFilesFolder` otherwise.
 
-Both of the last two defer to explicit configuration: a component with its own
-`WithAttributes` call, or an install directory whose parent the caller declared,
-is left exactly as authored. ICE80 then cross-checks the result, failing the
-build if 64-bit content (64-bit components, the `*64Folder` directories, 64-bit
-script custom actions, or 64-bit registry searches) appears in a package whose
-`Template` declares a 32-bit platform.
+Both defer to explicit configuration: a component with its own `WithAttributes`
+call, or an install directory whose parent the caller declared, is left exactly
+as authored. ICE80 then cross-checks the result, failing the build if 64-bit
+content (64-bit components, the `*64Folder` directories, 64-bit script custom
+actions, or 64-bit registry searches) appears in a package whose `Template`
+declares a 32-bit platform.
 
 ### Signing (Authenticode)
 

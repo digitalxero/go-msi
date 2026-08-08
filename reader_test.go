@@ -143,11 +143,10 @@ func buildRTExpectedDB(t *testing.T) msiDatabase {
 	dirNamer := newMSIShortNamer()
 	installDirName, err := dirNamer.msiFileNameColumn(msiSanitizeDirName(cfg.ProductName))
 	require.NoError(t, err)
-	// The default platform is x64, so the install root hangs off
-	// ProgramFiles64Folder and every component carries the 64-bit attribute.
+	// The install root hangs off TARGETDIR (InstallToProgramFiles is opt-in),
+	// but the default x64 platform still marks components 64-bit.
 	db.WithDirectory("TARGETDIR", "", "SourceDir")
-	db.WithDirectory("ProgramFiles64Folder", "TARGETDIR", ".")
-	db.WithDirectory("INSTALLFOLDER", "ProgramFiles64Folder", installDirName)
+	db.WithDirectory("INSTALLFOLDER", "TARGETDIR", installDirName)
 
 	componentGUID, err := msiGUIDv5(msiPackageNamespaceGUID, "component|"+cfg.ProductCode+"|INSTALLFOLDER|MainComponent")
 	require.NoError(t, err)

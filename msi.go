@@ -127,8 +127,23 @@ type PackageBuilder interface {
 	// P11: set the target CPU architecture written to the SummaryInformation
 	// Template (default Platform_x64). The platform also selects the minimum
 	// Windows Installer version (PID 14) and, for 64-bit targets, the 64-bit
-	// component attribute and ProgramFiles64Folder install root.
+	// component attribute.
 	WithPlatform(plat Platform) PackageBuilder
+
+	// P11: root the install directory under the Program Files folder matching
+	// the target platform — ProgramFiles64Folder for 64-bit platforms,
+	// ProgramFilesFolder otherwise — so the package installs to
+	// "C:\Program Files\<ProductName>".
+	//
+	// This is opt-in because Windows Installer resolves the Program Files
+	// folders from the system rather than from TARGETDIR, so a package that
+	// uses it can no longer be redirected with "msiexec TARGETDIR=…"; callers
+	// override the location with "msiexec INSTALLFOLDER=…" instead. Without it
+	// the install directory hangs off TARGETDIR, which stays redirectable.
+	//
+	// It has no effect on an install directory whose parent the caller
+	// declared explicitly.
+	InstallToProgramFiles() PackageBuilder
 
 	// Build performs final validation (required fields, GUIDs, versions,
 	// duplicate detection within directories, etc.), prepares any
@@ -376,6 +391,9 @@ type msiPackage struct {
 
 	// P11 target architecture (zero value = msiDefaultPlatform).
 	platform Platform
+	// P11 opt-in: root the install directory under the platform's Program
+	// Files folder instead of TARGETDIR.
+	installToProgramFiles bool
 
 	// deferred errors (style consistent with internal msiDB)
 	errs []error

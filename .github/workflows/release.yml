@@ -1,9 +1,11 @@
 name: Test & Release
 
+# Pull requests are covered by ci.yml; this workflow only runs on main, where
+# the release job can actually publish. Running it on PRs too duplicated every
+# test and windows-patch check for a release step that is always skipped.
 on:
   push:
     branches: [main]
-  pull_request:
 
 permissions:
   contents: write

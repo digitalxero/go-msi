@@ -118,11 +118,10 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 	// For flat repro parity (P1G2-051) and to match legacy BuildMSI behavior,
 	// synthesize the conventional TARGETDIR + INSTALLFOLDER (using product
 	// name for the install dir DefaultDir, which then gets short|long treatment).
-	// P11: the install root hangs off the Program Files folder matching the
-	// target platform (ProgramFiles64Folder for 64-bit targets). A caller that
-	// declared INSTALLFOLDER's parent itself keeps it.
-	ensureRootDirectories(p, "INSTALLFOLDER", msiSanitizeDirName(p.productName),
-		p.platformOrDefault().programFilesFolder())
+	// P11: the install root hangs off TARGETDIR unless the caller opted into
+	// InstallToProgramFiles. A caller that declared INSTALLFOLDER's parent
+	// itself keeps it either way.
+	ensureRootDirectories(p, "INSTALLFOLDER", msiSanitizeDirName(p.productName), p.installRootParent())
 
 	// Ensure any directory referenced by a shortcut exists before the Directory
 	// table is emitted. Standard Windows Installer directories (ProgramMenuFolder,
