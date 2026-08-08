@@ -211,7 +211,8 @@ func runICE26(ctx *iceContext) []Finding {
 }
 
 // runICE39 checks the SummaryInformation stream (required PIDs, GUID
-// format for RevisionNumber/PackageCode, PageCount == 200, etc.).
+// format for RevisionNumber/PackageCode, a well-formed Template, and a
+// PageCount at or above the minimum the Template's platform requires).
 func runICE39(ctx *iceContext) []Finding {
 	var findings []Finding
 
@@ -226,12 +227,36 @@ func runICE39(ctx *iceContext) []Finding {
 			message: fmt.Sprintf("RevisionNumber (PackageCode) %q is not a valid GUID", ctx.summary.RevisionNumber),
 		})
 	}
-	if ctx.summary.PageCount != 0 && ctx.summary.PageCount != 200 {
+
+	// The Template's platform half determines the PageCount floor, so parse it
+	// first. A blank platform is legal (the package is not architecture-
+	// restricted) and falls back to the baseline floor.
+	plat := msiDefaultPlatform
+	if ctx.summary.Template != "" && !templateIsProductCodeList(ctx.summary.Template) {
+		parsed, _, err := parseTemplate(ctx.summary.Template)
+		switch {
+		case err != nil:
+			findings = append(findings, &msiFinding{
+				ice:     "ICE39",
+				sev:     SeverityError,
+				table:   "",
+				message: fmt.Sprintf("Template %q is malformed: %v", ctx.summary.Template, err),
+			})
+			plat = platformUnset
+		case parsed != platformUnset:
+			plat = parsed
+		default:
+			// Blank platform: not architecture-restricted, baseline floor.
+			plat = Platform_Intel
+		}
+	}
+
+	if plat != platformUnset && ctx.summary.PageCount != 0 && ctx.summary.PageCount < plat.minSchemaVersion() {
 		findings = append(findings, &msiFinding{
 			ice:     "ICE39",
 			sev:     SeverityWarning,
 			table:   "",
-			message: fmt.Sprintf("PageCount %d is not the minimum 200", ctx.summary.PageCount),
+			message: fmt.Sprintf("PageCount %d is below the minimum %d required by platform %s", ctx.summary.PageCount, plat.minSchemaVersion(), plat),
 		})
 	}
 	return findings

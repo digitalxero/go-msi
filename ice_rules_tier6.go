@@ -26,6 +26,8 @@ func registerTier6Rules() []iceRule {
 		// Dedicated never-emitted-table ICEs (P11.6).
 		{id: "ICE33", fn: runICE33, tables: []string{"Registry"}},
 		{id: "ICE83", fn: runICE83, tables: []string{"MsiAssembly"}},
+		// Platform consistency (P11).
+		{id: "ICE80", fn: runICE80, tables: []string{"Component", "Directory", "CustomAction", "RegLocator"}},
 	}
 }
 
@@ -60,7 +62,43 @@ func runICE08(ctx *iceContext) []Finding {
 
 // --- ICE09: components installed to a system directory should be permanent ---
 
-const msidbComponentAttributesPermanent int16 = 0x10
+// The documented Component.Attributes bits (Microsoft Learn). LocalOnly is the
+// absence of every bit and so has no constant.
+const (
+	msidbComponentAttributesSourceOnly        int16 = 0x0001
+	msidbComponentAttributesOptional          int16 = 0x0002
+	msidbComponentAttributesRegistryKeyPath   int16 = 0x0004
+	msidbComponentAttributesSharedDllRefCount int16 = 0x0008
+	msidbComponentAttributesPermanent         int16 = 0x0010
+	msidbComponentAttributesODBCDataSource    int16 = 0x0020
+	msidbComponentAttributesTransitive        int16 = 0x0040
+	msidbComponentAttributesNeverOverwrite    int16 = 0x0080
+	// msidbComponentAttributes64bit marks a component as 64-bit: its files go to
+	// the 64-bit locations and its registry rows to the 64-bit view rather than
+	// through WOW6432Node redirection. Only legal in a 64-bit package.
+	msidbComponentAttributes64bit int16 = 0x0100
+	// msidbComponentAttributesDisableRegistryReflection is only meaningful on
+	// 64-bit Windows and therefore only in a 64-bit package.
+	msidbComponentAttributesDisableRegistryReflection int16 = 0x0200
+	msidbComponentAttributesUninstallOnSupersedence   int16 = 0x0400
+	msidbComponentAttributesShared                    int16 = 0x0800
+)
+
+// The documented File.Attributes bits (Microsoft Learn).
+// msidbFileAttributesPatchAdded (0x1000) is declared in patch_transform.go.
+const (
+	msidbFileAttributesReadOnly      int16 = 0x0001
+	msidbFileAttributesHidden        int16 = 0x0002
+	msidbFileAttributesSystem        int16 = 0x0004
+	msidbFileAttributesVital         int16 = 0x0200
+	msidbFileAttributesChecksum      int16 = 0x0400
+	msidbFileAttributesNoncompressed int16 = 0x2000
+	msidbFileAttributesCompressed    int16 = 0x4000
+)
+
+// msidbLocatorType64bit is the RegLocator.Type bit that searches the 64-bit
+// registry view. Only legal in a 64-bit package.
+const msidbLocatorType64bit int16 = 0x10
 
 var msiSystemDirectories = map[string]bool{
 	"SystemFolder": true, "System64Folder": true, "WindowsFolder": true,
@@ -167,11 +205,33 @@ func runICE24(ctx *iceContext) []Finding {
 
 // --- ICE45: reserved Attributes bits must be zero ---
 
-// Documented valid Attributes masks (Microsoft Learn). Bits outside the mask are
+// Valid Attributes masks, OR-ed from the documented bits above rather than
+// written as literals so they cannot drift from them. Bits outside the mask are
 // reserved and must be zero.
 const (
-	iceComponentAttributesValid int16 = 0x1FFF // through msidbComponentAttributes64bit/...
-	iceFileAttributesValid      int16 = 0x3E07 // ReadOnly|Hidden|System|Vital|Checksum|PatchAdded|Noncompressed|Compressed
+	// 0x0FFF. Shared (0x0800) is the highest documented Component bit.
+	iceComponentAttributesValid = msidbComponentAttributesSourceOnly |
+		msidbComponentAttributesOptional |
+		msidbComponentAttributesRegistryKeyPath |
+		msidbComponentAttributesSharedDllRefCount |
+		msidbComponentAttributesPermanent |
+		msidbComponentAttributesODBCDataSource |
+		msidbComponentAttributesTransitive |
+		msidbComponentAttributesNeverOverwrite |
+		msidbComponentAttributes64bit |
+		msidbComponentAttributesDisableRegistryReflection |
+		msidbComponentAttributesUninstallOnSupersedence |
+		msidbComponentAttributesShared
+
+	// 0x7607. Note the gaps: 0x0008-0x0100 and 0x0800 are reserved for File.
+	iceFileAttributesValid = msidbFileAttributesReadOnly |
+		msidbFileAttributesHidden |
+		msidbFileAttributesSystem |
+		msidbFileAttributesVital |
+		msidbFileAttributesChecksum |
+		msidbFileAttributesPatchAdded |
+		msidbFileAttributesNoncompressed |
+		msidbFileAttributesCompressed
 )
 
 func runICE45(ctx *iceContext) []Finding {
@@ -301,6 +361,99 @@ func runICE83(ctx *iceContext) []Finding {
 				ice: "ICE83", sev: SeverityError, table: "MsiAssembly", column: "Component_", rowKeys: rowPKs(r),
 				message: fmt.Sprintf("assembly component %q has no MsiAssemblyName entries (the strong name cannot be resolved)", comp),
 			})
+		}
+	}
+	return findings
+}
+
+// --- ICE80: 64-bit content must agree with the Template platform ---
+
+// msi64BitDirectories are the standard directories that only exist on a 64-bit
+// install and therefore only belong in a 64-bit package.
+var msi64BitDirectories = map[string]bool{
+	"ProgramFiles64Folder": true, "System64Folder": true, "CommonFiles64Folder": true,
+}
+
+// runICE80 cross-checks the SummaryInformation Template platform against the
+// package's 64-bit content. Windows Installer requires a package that uses any
+// 64-bit feature — 64-bit components, the *64Folder standard directories,
+// 64-bit script custom actions, or 64-bit registry searches — to declare a
+// 64-bit platform (x64, Intel64 or Arm64) in its Template.
+func runICE80(ctx *iceContext) []Finding {
+	// A patch's PID7 is a ProductCode list, not a platform; it carries no
+	// platform claim to check against.
+	if ctx.summary.Template == "" || templateIsProductCodeList(ctx.summary.Template) {
+		return nil
+	}
+	plat, _, err := parseTemplate(ctx.summary.Template)
+	if err != nil {
+		return nil // ICE39 already reports a malformed Template
+	}
+	if plat.isWin64() {
+		return nil
+	}
+
+	// declared is what the Template claims, for the message. A blank platform
+	// half is legal but is still not a 64-bit declaration.
+	declared := plat.String()
+	if declared == "" {
+		declared = "(none)"
+	}
+	finding := func(table, column string, r msiRow, what string) Finding {
+		return &msiFinding{
+			ice: "ICE80", sev: SeverityError, table: table, column: column, rowKeys: rowPKs(r),
+			message: fmt.Sprintf("%s, but the Template platform is %s; a 64-bit package must declare x64, Intel64 or Arm64", what, declared),
+		}
+	}
+
+	var findings []Finding
+	for _, r := range ctx.rowsOf("Component") {
+		v := r.values()
+		if len(v) < 4 {
+			continue
+		}
+		comp, _ := v[0].(string)
+		attrs := iceInt16(v[3])
+		if attrs&msidbComponentAttributes64bit != 0 {
+			findings = append(findings, finding("Component", "Attributes", r,
+				fmt.Sprintf("component %q is marked 64-bit", comp)))
+		}
+		if attrs&msidbComponentAttributesDisableRegistryReflection != 0 {
+			findings = append(findings, finding("Component", "Attributes", r,
+				fmt.Sprintf("component %q disables registry reflection, which is 64-bit only", comp)))
+		}
+	}
+	for _, r := range ctx.rowsOf("Directory") {
+		v := r.values()
+		if len(v) < 1 {
+			continue
+		}
+		dir, _ := v[0].(string)
+		if msi64BitDirectories[dir] {
+			findings = append(findings, finding("Directory", "Directory", r,
+				fmt.Sprintf("directory %q is a 64-bit location", dir)))
+		}
+	}
+	for _, r := range ctx.rowsOf("CustomAction") {
+		v := r.values()
+		if len(v) < 2 {
+			continue
+		}
+		action, _ := v[0].(string)
+		if iceInt16(v[1])&caMod64BitScript != 0 {
+			findings = append(findings, finding("CustomAction", "Type", r,
+				fmt.Sprintf("custom action %q is a 64-bit script", action)))
+		}
+	}
+	for _, r := range ctx.rowsOf("RegLocator") {
+		v := r.values()
+		if len(v) < 5 {
+			continue
+		}
+		sig, _ := v[0].(string)
+		if iceInt16(v[4])&msidbLocatorType64bit != 0 {
+			findings = append(findings, finding("RegLocator", "Type", r,
+				fmt.Sprintf("registry search %q reads the 64-bit registry view", sig)))
 		}
 	}
 	return findings

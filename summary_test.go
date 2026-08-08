@@ -117,6 +117,69 @@ func TestMSISummarySectionLayout(t *testing.T) {
 	assert.Equal(t, []byte{0x03, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00}, section[0xAC:0xB4], "PID 15 VT_I4 2")
 }
 
+// summaryPropertyOffset resolves a PID's payload offset from the section's
+// PID/offset table, so a test can assert on a property whose length shifts
+// every offset after it.
+func summaryPropertyOffset(t *testing.T, section []byte, wantPID uint32) uint32 {
+	t.Helper()
+	count := binary.LittleEndian.Uint32(section[4:8])
+	for i := range count {
+		pid := binary.LittleEndian.Uint32(section[8+8*i:])
+		if pid == wantPID {
+			return binary.LittleEndian.Uint32(section[12+8*i:])
+		}
+	}
+	t.Fatalf("PID %d not present in the section table", wantPID)
+	return 0
+}
+
+// TestMSISummaryTemplateLengthsAcrossPlatforms covers the platform tokens whose
+// length differs from "x64" — the golden worked example above pins the layout
+// for the 9-byte "x64;1033" only, and every offset after PID 7 moves with it.
+func TestMSISummaryTemplateLengthsAcrossPlatforms(t *testing.T) {
+	for _, tc := range []struct {
+		template string
+		wantPad  int // zero bytes after the NUL to reach a 4-byte boundary
+	}{
+		{"Intel;1033", 1},   // 10 + NUL = 11 -> 12
+		{"x64;1033", 3},     // 8 + NUL = 9   -> 12
+		{"Arm;1033", 3},     // 8 + NUL = 9   -> 12
+		{"Arm64;1033", 1},   // 10 + NUL = 11 -> 12
+		{"Intel64;1033", 3}, // 12 + NUL = 13 -> 16
+	} {
+		t.Run(tc.template, func(t *testing.T) {
+			info := summaryGoldenInfo()
+			info.Template = tc.template
+			data, err := buildMSISummaryStream(info)
+			require.NoError(t, err)
+
+			section := data[48:]
+			assert.Equal(t, uint32(len(data)-48), binary.LittleEndian.Uint32(section[0:4]),
+				"cbSection still covers the whole section")
+
+			off := summaryPropertyOffset(t, section, msiPIDTemplate)
+			assert.Equal(t, uint32(30), binary.LittleEndian.Uint32(section[off:off+4]), "PID 7 VT_LPSTR")
+
+			cb := binary.LittleEndian.Uint32(section[off+4 : off+8])
+			assert.Equal(t, uint32(len(tc.template)+1), cb, "PID 7 cb = len + NUL")
+
+			payload := make([]byte, 0, int(cb)+tc.wantPad)
+			payload = append(payload, tc.template...)
+			payload = append(payload, 0)
+			payload = append(payload, make([]byte, tc.wantPad)...)
+			assert.Equal(t, payload, section[off+8:off+8+uint32(len(payload))],
+				"PID 7 bytes, NUL and padding to a 4-byte boundary")
+
+			// The whole stream must still round-trip through the parser.
+			parsed, err := parseMSISummaryStream(data)
+			require.NoError(t, err)
+			assert.Equal(t, tc.template, parsed.Template)
+			assert.Equal(t, info.RevisionNumber, parsed.RevisionNumber,
+				"the property after Template survives the offset shift")
+		})
+	}
+}
+
 func TestMSISummaryRoundtripFull(t *testing.T) {
 	info := msiSummaryInfo{
 		Codepage:       1252,

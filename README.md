@@ -21,7 +21,7 @@ Windows SDK, no external tools required; it works on any platform Go targets.
   real `msiexec` in CI (and Wine locally).
 - Authenticode-sign MSIs in pure Go (RSA/ECDSA, optional RFC3161 timestamp),
   cross-checked with `osslsigncode`.
-- ICE validation by default (26 dedicated rules + generic category/foreign-key
+- ICE validation by default (27 dedicated rules + generic category/foreign-key
   validation over ~80 cataloged tables), with an auditable coverage table.
 - Deterministic, reproducible output.
 
@@ -44,6 +44,9 @@ go get go.digitalxero.dev/go-msi
 
 ## Usage
 
+This builds an MSI that installs `app.exe` into `C:\Program Files\My App` and adds
+a **My App** shortcut to the Start Menu.
+
 ```go
 package main
 
@@ -62,20 +65,58 @@ func main() {
 		WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
 		WithUpgradeCode("{ABCDEF01-2345-6789-ABCD-EF0123456789}")
 
+	app, err := msi.FileSourceFromPath("app.exe")
+	if err != nil {
+		panic(err)
+	}
+
+	// The install root is created under the target platform's Program Files
+	// folder, so "My App" resolves to C:\Program Files\My App.
 	c := b.RootDirectory("INSTALLFOLDER", "My App").
 		Component("Main").AssociateToFeature("MainFeature")
-	c.WithFile("app.exe", appBytes)
+	c.WithFile("app.exe", app)
+
+	// An advertised Start Menu shortcut. Advertised targets the feature, so
+	// Windows Installer repairs the app if the key file goes missing.
+	c.Shortcut("My App.lnk", "").
+		InDirectory("ProgramMenuFolder").
+		Description("Launch My App").
+		Advertised("MainFeature")
+
 	b.Feature("MainFeature").WithTitle("Main Feature").WithLevel(1)
 
 	pkg, err := b.Build()
 	if err != nil {
 		panic(err)
 	}
+
 	f, _ := os.Create("MyApp.msi")
 	defer f.Close()
 	_ = pkg.WriteMSI(f)
 }
 ```
+
+Install and uninstall it silently:
+
+```powershell
+# Install with no UI, logging verbosely.
+msiexec /i MyApp.msi /qn /norestart /l*v install.log
+
+# Uninstall silently, by package or by ProductCode.
+msiexec /x MyApp.msi /qn /norestart
+msiexec /x {12345678-1234-1234-1234-123456789ABC} /qn /norestart
+```
+
+A per-machine install writes to `C:\Program Files`, so run these from an
+elevated prompt — `/qn` suppresses the UAC prompt along with the rest of the UI,
+and an unelevated silent install fails with error 1925. `INSTALLFOLDER` is a
+public property, so `msiexec /i MyApp.msi /qn INSTALLFOLDER="D:\Apps\My App"`
+overrides the location.
+
+Because the default platform is `Platform_x64`, the install root hangs off
+`ProgramFiles64Folder` (`C:\Program Files`). A `Platform_Intel` package uses
+`ProgramFilesFolder`, which is `C:\Program Files (x86)` on 64-bit Windows — see
+[Target platform](#target-platform).
 
 `AddTree(fsys, attachPointDirID, featureID)` harvests a filesystem tree (one
 component per file by default, each associated with `featureID`). The emitted MSI
@@ -87,6 +128,45 @@ MSZIP cabinet whose members are keyed by the File-table primary keys.
 ICE validation runs by default on `Build()`/`WriteMSI()`; error-severity findings
 fail the build (`WithSkipValidation()` is the escape hatch). Use
 `msi.NewValidator().WithAllICEs().Build()` for explicit runs.
+
+### Target platform
+
+`WithPlatform` sets the architecture recorded in the SummaryInformation
+`Template` property. The default is `Platform_x64`.
+
+```go
+pkg := msi.NewPackage(). /* … */ WithPlatform(msi.Platform_Arm64)
+```
+
+| Constant | Template token | Target | Minimum installer |
+| --- | --- | --- | --- |
+| `Platform_Intel` | `Intel` | x86, 32-bit | 2.0 |
+| `Platform_Intel64` | `Intel64` | Itanium / IA-64 | 2.0 |
+| `Platform_x64` | `x64` | x86-64 (AMD64 / EM64T) | 2.0 |
+| `Platform_Arm` | `Arm` | ARM, 32-bit | 5.0 |
+| `Platform_Arm64` | `Arm64` | AArch64 | 5.0 |
+
+`Platform_Intel64` means **Itanium**, not x86-64 — Intel's modern "Intel 64"
+branding refers to AMD64, but the Windows Installer token does not. AMD64
+packages use `Platform_x64`. These five are the only tokens Windows Installer
+accepts; there is no `amd64` or `neutral` (the latter is an MSIX architecture).
+
+The platform also drives:
+
+- the minimum Windows Installer version in `PageCount` (PID 14) — Arm and Arm64
+  require 5.0 rather than the 2.0 baseline;
+- `msidbComponentAttributes64bit` on components of a 64-bit package, so their
+  files land in the 64-bit locations and their registry rows bypass WOW6432Node
+  redirection;
+- whether the auto-created install root hangs off `ProgramFiles64Folder` or
+  `ProgramFilesFolder`.
+
+Both of the last two defer to explicit configuration: a component with its own
+`WithAttributes` call, or an install directory whose parent the caller declared,
+is left exactly as authored. ICE80 then cross-checks the result, failing the
+build if 64-bit content (64-bit components, the `*64Folder` directories, 64-bit
+script custom actions, or 64-bit registry searches) appears in a package whose
+`Template` declares a 32-bit platform.
 
 ### Signing (Authenticode)
 

@@ -124,6 +124,12 @@ type PackageBuilder interface {
 	// Template language list.
 	WithLanguageTransform(lcid LanguageCode, configure func(t PackageBuilder)) PackageBuilder
 
+	// P11: set the target CPU architecture written to the SummaryInformation
+	// Template (default Platform_x64). The platform also selects the minimum
+	// Windows Installer version (PID 14) and, for 64-bit targets, the 64-bit
+	// component attribute and ProgramFiles64Folder install root.
+	WithPlatform(plat Platform) PackageBuilder
+
 	// Build performs final validation (required fields, GUIDs, versions,
 	// duplicate detection within directories, etc.), prepares any
 	// auto-derived values (GUIDs via msiGUIDv5 where not supplied), and
@@ -368,6 +374,9 @@ type msiPackage struct {
 	language           int
 	languageTransforms []languageTransform
 
+	// P11 target architecture (zero value = msiDefaultPlatform).
+	platform Platform
+
 	// deferred errors (style consistent with internal msiDB)
 	errs []error
 
@@ -402,11 +411,14 @@ type shortcutEntry struct {
 }
 
 type compEntry struct {
-	id         string
-	dirID      string
-	guid       string
-	keyPath    any
-	attrs      int16
+	id      string
+	dirID   string
+	guid    string
+	keyPath any
+	attrs   int16
+	// attrsSet records an explicit WithAttributes call so compile-time defaults
+	// (the platform's 64-bit bit) never override what the caller asked for.
+	attrsSet   bool
 	featAssocs []string
 	files      []attachedFile
 	// P3
@@ -641,6 +653,9 @@ func (p *msiPackage) Build() (Package, error) {
 	if p.upgradeCode != "" && !msiValidGUID(p.upgradeCode) {
 		return nil, fmt.Errorf("msi: UpgradeCode %q is not a braced uppercase GUID", p.upgradeCode)
 	}
+	if p.platform != platformUnset && !p.platform.valid() {
+		return nil, fmt.Errorf("msi: Platform(%d) is not one of Platform_Intel, Platform_Intel64, Platform_x64, Platform_Arm, Platform_Arm64", int(p.platform))
+	}
 
 	// Later slices add deeper graph validation (cycles, missing parents,
 	// duplicate basenames within a dir, keypath rules, etc.).
@@ -694,7 +709,7 @@ func (p *msiPackage) WriteMSI(w io.Writer) error {
 		CreatingApp:    "go-msix",
 		CreateTime:     msiBuildTime,
 		SaveTime:       msiBuildTime,
-		PageCount:      200,
+		PageCount:      p.platformOrDefault().minSchemaVersion(),
 		WordCount:      2,
 		Security:       2,
 	}
@@ -833,6 +848,7 @@ func (c *compHandle) WithKeyPath(keyPath any) ComponentBuilder {
 func (c *compHandle) WithAttributes(attrs int16) ComponentBuilder {
 	if e := c.pkg.compEntries[c.id]; e != nil {
 		e.attrs = attrs
+		e.attrsSet = true
 	}
 	return c
 }
