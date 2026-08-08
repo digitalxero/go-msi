@@ -513,6 +513,8 @@ func TestRegisteredICEs_NoStubRules(t *testing.T) {
 		"ICE08", "ICE09", "ICE16", "ICE21", "ICE24", "ICE45", "ICE74",
 		// P11 tier-6 dedicated never-emitted-table ICEs
 		"ICE33", "ICE83",
+		// P11 platform consistency
+		"ICE80",
 	}
 	require.Len(t, allICERules(), len(expected), "registered ICE count must match the honest implemented inventory")
 	for _, id := range expected {

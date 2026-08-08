@@ -14,9 +14,6 @@ import (
 
 const msiDefaultLanguage = 1033
 
-// msiPlatform is the Template platform token (the package targets x64 today).
-const msiPlatform = "x64"
-
 // LanguageCode is a Windows Language Identifier (LCID) used for ProductLanguage
 // and the SummaryInformation Template. Named constants for the common locales
 // are provided below; any LCID can still be passed as LanguageCode(n).
@@ -128,12 +125,13 @@ func (p *msiPackage) buildLanguageSubStorages(baseDB msiDatabase) ([]msiSubStora
 	return subs, nil
 }
 
-// msiTemplateString builds the SummaryInformation Template: "x64;<lcid>" plus,
-// when embedded language transforms exist, a comma-separated list of their LCIDs.
+// msiTemplateString builds the SummaryInformation Template: "<platform>;<lcid>"
+// plus, when embedded language transforms exist, a comma-separated list of their
+// LCIDs. The platform half is owned by platform.go and defaults to x64.
 func msiTemplateString(p *msiPackage) string {
 	langs := []string{strconv.Itoa(p.languageOrDefault())}
 	for _, t := range p.languageTransforms {
 		langs = append(langs, strconv.Itoa(t.lcid))
 	}
-	return msiPlatform + ";" + strings.Join(langs, ",")
+	return p.platformOrDefault().String() + ";" + strings.Join(langs, ",")
 }

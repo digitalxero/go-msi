@@ -118,7 +118,10 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 	// For flat repro parity (P1G2-051) and to match legacy BuildMSI behavior,
 	// synthesize the conventional TARGETDIR + INSTALLFOLDER (using product
 	// name for the install dir DefaultDir, which then gets short|long treatment).
-	ensureRootDirectories(p, "INSTALLFOLDER", msiSanitizeDirName(p.productName))
+	// P11: the install root hangs off TARGETDIR unless the caller opted into
+	// InstallToProgramFiles. A caller that declared INSTALLFOLDER's parent
+	// itself keeps it either way.
+	ensureRootDirectories(p, "INSTALLFOLDER", msiSanitizeDirName(p.productName), p.installRootParent())
 
 	// Ensure any directory referenced by a shortcut exists before the Directory
 	// table is emitted. Standard Windows Installer directories (ProgramMenuFolder,
@@ -338,7 +341,14 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			logical := e.dirID + "/" + first.name
 			kp = generateMSIFileID(logical, nil)
 		}
-		db.WithComponent(cid, g, e.dirID, e.attrs, kp)
+		// P11: a 64-bit package's components carry msidbComponentAttributes64bit
+		// so their files land in the 64-bit locations and their registry rows
+		// bypass WOW6432Node redirection. An explicit WithAttributes wins.
+		attrs := e.attrs
+		if !e.attrsSet && p.platformOrDefault().isWin64() {
+			attrs |= msidbComponentAttributes64bit
+		}
+		db.WithComponent(cid, g, e.dirID, attrs, kp)
 
 		for _, f := range e.files {
 			hasFiles = true
@@ -604,7 +614,10 @@ func ensureStandardDirectory(p *msiPackage, dirID string) {
 // still produces a valid tree. compileMSIPackage calls it unconditionally at
 // the top of the walk so that the new path matches the legacy flat roots
 // (TARGETDIR + INSTALLFOLDER) required for flat-repro parity.
-func ensureRootDirectories(p *msiPackage, installID, installDefault string) {
+// installParent is the standard directory the install root is placed under; it
+// is created on demand. An empty installParent roots the install directory
+// directly at TARGETDIR.
+func ensureRootDirectories(p *msiPackage, installID, installDefault, installParent string) {
 	if p == nil {
 		return
 	}
@@ -618,7 +631,12 @@ func ensureRootDirectories(p *msiPackage, installID, installDefault string) {
 				e = &dirEntry{id: installID}
 				p.dirEntries[installID] = e
 			}
-			e.parent = "TARGETDIR"
+			parent := "TARGETDIR"
+			if installParent != "" && installParent != installID {
+				ensureStandardDirectory(p, installParent)
+				parent = installParent
+			}
+			e.parent = parent
 			if e.defaultDir == "" {
 				e.defaultDir = installDefault
 			}

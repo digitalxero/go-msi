@@ -208,6 +208,34 @@ func TestICE45_ReservedAttributeBits(t *testing.T) {
 	assert.Empty(t, runRule(t, runICE45, good))
 }
 
+// iceFileRow builds a File row (File, Component_, FileName, FileSize, Version,
+// Language, Attributes, Sequence).
+func iceFileRow(name string, attrs int16) []any {
+	return []any{name, "C1", "a.exe", int32(1), nil, nil, attrs, int16(1)}
+}
+
+func TestICE45_MasksMatchTheDocumentedBits(t *testing.T) {
+	// Shared (0x0800) is the highest documented Component bit, so 0x1000 is
+	// reserved — the mask used to be 0x1FFF and let it through silently.
+	assert.Equal(t, int16(0x0FFF), iceComponentAttributesValid)
+	assert.NotEmpty(t,
+		runRule(t, runICE45, iceTableWithRows(t, "Component", compRow("C1", "", "INSTALLFOLDER", 0x1000))),
+		"Component.Attributes 0x1000 is reserved")
+	assert.Empty(t,
+		runRule(t, runICE45, iceTableWithRows(t, "Component", compRow("C1", "", "INSTALLFOLDER", msidbComponentAttributesShared))),
+		"Shared is the highest documented Component bit and must pass")
+
+	// The File mask used to be 0x3E07: it rejected Compressed (0x4000) and
+	// accepted the reserved 0x0800.
+	assert.Equal(t, int16(0x7607), iceFileAttributesValid)
+	assert.Empty(t,
+		runRule(t, runICE45, iceTableWithRows(t, "File", iceFileRow("F1", msidbFileAttributesCompressed))),
+		"File.Attributes Compressed (0x4000) is documented and must pass")
+	assert.NotEmpty(t,
+		runRule(t, runICE45, iceTableWithRows(t, "File", iceFileRow("F1", 0x0800))),
+		"File.Attributes 0x0800 is reserved")
+}
+
 func TestICE09_SystemFolderComponent(t *testing.T) {
 	notPerm := iceTableWithRows(t, "Component", compRow("C1", "", "SystemFolder", 0))
 	f := runRule(t, runICE09, notPerm)

@@ -93,7 +93,7 @@ type msiSummaryInfo struct {
 	CreatingApp    string    // PID 18; tool name and version
 	CreateTime     time.Time // PID 12; omitted when zero
 	SaveTime       time.Time // PID 13; omitted when zero
-	PageCount      int       // PID 14; 200 for x86/x64, 500 for Arm64
+	PageCount      int       // PID 14; see Platform.minSchemaVersion (200 for Intel/Intel64/x64, 500 for Arm/Arm64)
 	WordCount      int       // PID 15; 2 = compressed source, long file names
 	CharacterCount int       // PID 16; transforms: low word validation flags, high word error flags; omitted when 0
 	Security       int       // PID 19; 2 = read-only recommended; omitted when 0

@@ -155,22 +155,26 @@ func (t *msiTransform) WriteMST(w io.Writer) error {
 }
 
 // summaryInfo builds the transform \x05SummaryInformation: PID7 Template is the
-// target platform;lang, PID9 RevisionNumber is the base→target lineage, PID14
-// PageCount carries the validation flags.
+// platform;lang the database must have BEFORE the transform applies, PID8 is the
+// platform;lang it has AFTER, PID9 RevisionNumber is the base→target lineage,
+// PID14 PageCount carries the validation flags.
 func (t *msiTransform) summaryInfo() msiSummaryInfo {
 	lineage := t.base.productCode + t.base.version + ";" +
 		t.target.productCode + t.target.version + ";" + t.target.upgradeCode
 	return msiSummaryInfo{
-		Codepage:       1252,
-		Title:          "Transform",
-		Author:         t.target.manufacturer,
-		Template:       msiTemplateString(t.target),
+		Codepage: 1252,
+		Title:    "Transform",
+		Author:   t.target.manufacturer,
+		// PID7 (Template): the platform and language the target database must
+		// already have for this transform to apply. That is the BASE side of the
+		// diff — it is what msiexec compares against when the caller asks for
+		// MSITRANSFORM_VALIDATE_PLATFORM / _LANGUAGE.
+		Template:       msiTemplateString(t.base),
 		RevisionNumber: lineage,
 		// PID8 (Last Saved By): for a transform this is the platform and language
 		// the database should have AFTER the transform is applied (i.e. the new
 		// Template). Windows' patch sequencer requires it ("last author info
-		// property is missing from transform" / error 1648 otherwise). The patch
-		// transforms do not change platform/language, so it equals the Template.
+		// property is missing from transform" / error 1648 otherwise).
 		LastSavedBy: msiTemplateString(t.target),
 		CreatingApp: "go-msix",
 		CreateTime:  msiBuildTime,
@@ -179,7 +183,12 @@ func (t *msiTransform) summaryInfo() msiSummaryInfo {
 		// schema version. It MUST be present: msiexec rejects a transform whose
 		// summary has no version with error 2758 ("Transform doesn't contain an
 		// MSI version"), making a patch's transform invalid / not applicable.
-		PageCount: msiSchemaVersion,
+		// Either side of the diff may raise the floor (an Arm64 database needs
+		// 5.0), so the transform takes the higher of the two.
+		PageCount: max(
+			t.base.platformOrDefault().minSchemaVersion(),
+			t.target.platformOrDefault().minSchemaVersion(),
+		),
 		// Transform validation/error flags live in PID16 (CharacterCount). Per
 		// MSDN the UPPER word holds the validation flags and the LOWER word the
 		// error-condition flags.
