@@ -30,7 +30,11 @@ var (
 	oidSpcIndividual   = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 2, 1, 21}
 
 	oidRSAEncryption = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
-	oidECPublicKey   = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
+
+	oidECDSAWithSHA1   = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 1}
+	oidECDSAWithSHA256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}
+	oidECDSAWithSHA384 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 3}
+	oidECDSAWithSHA512 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 4}
 
 	oidSHA1   = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
 	oidSHA384 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 2}
@@ -39,6 +43,22 @@ var (
 
 // msiSipGUID is the MSI SIP GUID stored in SpcSipInfo.
 var msiSipGUID = []byte{0xf1, 0x10, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}
+
+// ecdsaSignatureAlgorithmOID maps a hash to its ecdsa-with-SHAxxx signature
+// algorithm OID.
+func ecdsaSignatureAlgorithmOID(h crypto.Hash) (asn1.ObjectIdentifier, error) {
+	switch h {
+	case crypto.SHA1:
+		return oidECDSAWithSHA1, nil
+	case crypto.SHA256:
+		return oidECDSAWithSHA256, nil
+	case crypto.SHA384:
+		return oidECDSAWithSHA384, nil
+	case crypto.SHA512:
+		return oidECDSAWithSHA512, nil
+	}
+	return nil, fmt.Errorf("msi sign: unsupported ecdsa hash %v", h)
+}
 
 // digestAlgorithmOID maps a hash to its AlgorithmIdentifier OID.
 func digestAlgorithmOID(h crypto.Hash) (asn1.ObjectIdentifier, error) {
@@ -67,13 +87,28 @@ type msiSpcSipInfo struct {
 	R5      int
 }
 
+// msiSpcAttributeTypeAndValue is SpcAttributeTypeAndOptionalValue: the value
+// SEQUENCE follows the OID directly (ASN1_ANY in osslsigncode's template) —
+// no [0] EXPLICIT wrapper, matching signtool/osslsigncode byte-for-byte.
 type msiSpcAttributeTypeAndValue struct {
 	Type  asn1.ObjectIdentifier
-	Value msiSpcSipInfo `asn1:"tag:0,explicit"`
+	Value msiSpcSipInfo
 }
 
 type msiSpcIndirectDataContent struct {
 	Data          msiSpcAttributeTypeAndValue
+	MessageDigest digestInfo
+}
+
+// msiSpcIndirectDataContentParse is the verify-side counterpart. Data.Value is
+// opaque so both the conformant bare SEQUENCE and the legacy [0] EXPLICIT
+// wrapper (emitted by go-msi before this was fixed) parse; only MessageDigest
+// is consumed.
+type msiSpcIndirectDataContentParse struct {
+	Data struct {
+		Type  asn1.ObjectIdentifier
+		Value asn1.RawValue
+	}
 	MessageDigest digestInfo
 }
 
@@ -329,7 +364,13 @@ func signDigest(key crypto.Signer, hash crypto.Hash, digest []byte) ([]byte, alg
 		if err != nil {
 			return nil, algorithmIdentifier{}, fmt.Errorf("msi sign: ecdsa sign: %w", err)
 		}
-		return sig, algorithmIdentifier{Algorithm: oidECPublicKey}, nil
+		// signatureAlgorithm is ecdsa-with-SHAxxx (RFC 5758: parameters absent),
+		// not id-ecPublicKey, which names the key algorithm.
+		alg, err := ecdsaSignatureAlgorithmOID(hash)
+		if err != nil {
+			return nil, algorithmIdentifier{}, err
+		}
+		return sig, algorithmIdentifier{Algorithm: alg}, nil
 	}
 	return nil, algorithmIdentifier{}, fmt.Errorf("msi sign: unsupported key type %T", key.Public())
 }
@@ -450,7 +491,7 @@ func parseMSISignedData(der []byte) (*parsedMSISignature, error) {
 
 	// SpcIndirectData: extract imprint + its contents octets.
 	spcDER := sd.EncapContentInfo.EContent.Bytes
-	var idc msiSpcIndirectDataContent
+	var idc msiSpcIndirectDataContentParse
 	if _, err := asn1.Unmarshal(spcDER, &idc); err != nil {
 		return nil, fmt.Errorf("msi verify: SpcIndirectData: %w", err)
 	}

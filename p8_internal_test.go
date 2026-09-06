@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/hex"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -372,4 +373,83 @@ func makeTestTimestampToken(t *testing.T, genTime time.Time) []byte {
 	out, err := asn1.Marshal(ci)
 	require.NoError(t, err)
 	return out
+}
+
+// TestSpcAttributeTypeAndValue_DERPinned pins the exact conformant DER of the
+// SpcAttributeTypeAndOptionalValue element: OID followed directly by the
+// SpcSipInfo SEQUENCE (version 1, MSI SIP GUID, five zero INTEGERs), with NO
+// [0] EXPLICIT wrapper. This is byte-identical to what osslsigncode's
+// msi_spc_sip_info_get() and signtool emit; the pre-fix implementation
+// inserted a spurious A0 wrapper that no external oracle could catch.
+func TestSpcAttributeTypeAndValue_DERPinned(t *testing.T) {
+	imprint := bytes.Repeat([]byte{0xAB}, 32)
+	der, _, err := buildMSISpcIndirectData(imprint, crypto.SHA256)
+	require.NoError(t, err)
+
+	var idc struct {
+		Data          asn1.RawValue
+		MessageDigest asn1.RawValue
+	}
+	rest, err := asn1.Unmarshal(der, &idc)
+	require.NoError(t, err)
+	require.Empty(t, rest)
+
+	const want = "3032" + // SEQUENCE, 50 bytes
+		"060a2b06010401823702011e" + // OID 1.3.6.1.4.1.311.2.1.30 (SpcSipInfo)
+		"3024" + // SpcSipInfo SEQUENCE, directly — no A0 wrapper
+		"020101" + // version 1
+		"0410f1100c0000000000c000000000000046" + // MSI SIP GUID
+		"020100020100020100020100020100" // five reserved zero INTEGERs
+	require.Equal(t, want, hex.EncodeToString(idc.Data.FullBytes))
+}
+
+// TestVerify_AcceptsLegacyExplicitTaggedSipInfo ensures the verify-side parser
+// still reads SpcIndirectDataContent produced by go-msix before the A0-wrapper
+// fix, so previously signed MSIs keep verifying.
+func TestVerify_AcceptsLegacyExplicitTaggedSipInfo(t *testing.T) {
+	type legacyAttr struct {
+		Type  asn1.ObjectIdentifier
+		Value msiSpcSipInfo `asn1:"tag:0,explicit"`
+	}
+	type legacyIDC struct {
+		Data          legacyAttr
+		MessageDigest digestInfo
+	}
+	imprint := bytes.Repeat([]byte{0xCD}, 32)
+	legacy, err := asn1.Marshal(legacyIDC{
+		Data: legacyAttr{Type: oidSpcSipInfo, Value: msiSpcSipInfo{Version: 1, SipGUID: msiSipGUID}},
+		MessageDigest: digestInfo{
+			Algorithm: algorithmIdentifier{Algorithm: oidSHA256, Parameters: asn1NULL()},
+			Digest:    imprint,
+		},
+	})
+	require.NoError(t, err)
+
+	var parsed msiSpcIndirectDataContentParse
+	rest, err := asn1.Unmarshal(legacy, &parsed)
+	require.NoError(t, err, "legacy [0] EXPLICIT form must still parse")
+	require.Empty(t, rest)
+	require.Equal(t, imprint, parsed.MessageDigest.Digest)
+
+	// And the conformant bare form parses with the same struct.
+	bare, _, err := buildMSISpcIndirectData(imprint, crypto.SHA256)
+	require.NoError(t, err)
+	rest, err = asn1.Unmarshal(bare, &parsed)
+	require.NoError(t, err)
+	require.Empty(t, rest)
+	require.Equal(t, imprint, parsed.MessageDigest.Digest)
+}
+
+// TestSignDigest_ECDSASignatureAlgorithmOID pins the SignerInfo
+// signatureAlgorithm for ECDSA keys to ecdsa-with-SHAxxx (RFC 5758), not
+// id-ecPublicKey (which names the key algorithm and is rejected by strict
+// CMS verifiers).
+func TestSignDigest_ECDSASignatureAlgorithmOID(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	digest := bytes.Repeat([]byte{0x11}, 32)
+	_, alg, err := signDigest(key, crypto.SHA256, digest)
+	require.NoError(t, err)
+	require.Equal(t, "1.2.840.10045.4.3.2", alg.Algorithm.String())
+	require.Empty(t, alg.Parameters.FullBytes, "ecdsa-with-SHAxxx parameters must be absent")
 }
