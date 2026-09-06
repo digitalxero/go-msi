@@ -6,9 +6,8 @@ package main
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -28,7 +27,10 @@ func main() {
 	}
 	outDir := os.Args[1]
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// RSA: the algorithm Windows Authenticode reliably accepts for MSI
+	// signatures, so the external oracles (osslsigncode + the windows-signature
+	// CI job) exercise the path real signers use.
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	fail(err)
 
 	tmpl := &x509.Certificate{
@@ -80,8 +82,10 @@ func main() {
 
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	fail(os.WriteFile(filepath.Join(outDir, "signer.pem"), pemBytes, 0o644))
+	// DER copy for Windows Import-Certificate in the windows-signature CI job.
+	fail(os.WriteFile(filepath.Join(outDir, "signer.cer"), certDER, 0o644))
 
-	fmt.Println("wrote signed.msi + signer.pem; pure-Go Verify OK")
+	fmt.Println("wrote signed.msi + signer.pem + signer.cer; pure-Go Verify OK")
 }
 
 func fail(err error) {

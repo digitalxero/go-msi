@@ -20,6 +20,49 @@ jobs:
       - name: Cross-check MSI/MSP against msitools + cabextract + osslsigncode
         run: ./scripts/verify_msi.sh
 
+  windows-signature:
+    # Real Windows validation of the MSI Authenticode signature: crypt32/msisip
+    # recompute the CFB imprint (Get-AuthenticodeSignature), then msiexec
+    # installs the signed package.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Build signed sample MSI
+        run: go run ./internal/gensignedmsi ${{ runner.temp }}
+      - name: Validate signature and install (real Windows trust stack)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $d = "$env:RUNNER_TEMP"
+
+          Import-Certificate -FilePath "$d\signer.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+
+          $sig = Get-AuthenticodeSignature "$d\signed.msi"
+          Write-Host "Get-AuthenticodeSignature: $($sig.Status) - $($sig.StatusMessage)"
+          if ($sig.Status -ne 'Valid') { throw "signed.msi status $($sig.Status), expected Valid: $($sig.StatusMessage)" }
+
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found" }
+          & $signtool.FullName verify /pa "$d\signed.msi"
+          if ($LASTEXITCODE -ne 0) { throw "signtool verify failed with exit code $LASTEXITCODE" }
+
+          # End-to-end: real msiexec install + uninstall of the signed MSI.
+          $p = Start-Process msiexec -ArgumentList "/i `"$d\signed.msi`" /qn TARGETDIR=`"C:\go-msi-signed-test`" /l*v `"$d\signed-install.log`"" -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "msiexec install failed with exit code $($p.ExitCode)" }
+          $p = Start-Process msiexec -ArgumentList "/x `"$d\signed.msi`" /qn" -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "msiexec uninstall failed with exit code $($p.ExitCode)" }
+          Write-Host "windows-signature: ALL CHECKS PASSED"
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-msi-logs
+          path: ${{ runner.temp }}/*.log
+
   windows-patch:
     # Real Windows Installer applies the generated .msp: install the base MSI,
     # apply the patch, assert the patched + new files on disk.
