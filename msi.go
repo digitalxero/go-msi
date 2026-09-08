@@ -253,7 +253,10 @@ type ComponentBuilder interface {
 	// P3: basic/compat registry (single value).
 	WithRegistry(root RegistryRoot, key, name string, value any) ComponentBuilder
 
-	// P3: shortcut support.
+	// Shortcut adds a shortcut owned by this component. For a non-advertised
+	// shortcut, target is an MSI formatted path such as "[INSTALLFOLDER]app.exe".
+	// A [#FileKey] reference requires the actual File-table key, not a filename.
+	// Call Advertised to target a feature and launch this component's key file.
 	Shortcut(name, target string) ShortcutBuilder
 
 	// P3: basic/compat shortcut.
@@ -279,7 +282,7 @@ type RegistryKeyBuilder interface {
 	AsKeyPath() RegistryKeyBuilder
 }
 
-// ShortcutBuilder for P3 shortcuts (advertised vs non, icon refs, etc.).
+// ShortcutBuilder configures a shortcut's target, placement, and launch settings.
 type ShortcutBuilder interface {
 	// InDirectory sets the directory the shortcut is created in (the
 	// Shortcut.Directory_ column). It may be a directory declared via
@@ -288,10 +291,23 @@ type ShortcutBuilder interface {
 	// "StartMenuFolder" — standard directories are added to the Directory table
 	// automatically. When unset, the shortcut is created in INSTALLFOLDER.
 	InDirectory(dirID string) ShortcutBuilder
+	// WorkingDirectory sets the shortcut's "Start in" directory (Shortcut.WkDir).
+	// Pass a Directory ID or a property name resolving to a directory, such as
+	// "INSTALLFOLDER", not "[INSTALLFOLDER]" or a literal path. Standard Windows
+	// Installer directories are added automatically. When unset or empty, this
+	// defaults to the owning component's directory, independently of InDirectory
+	// and whether the shortcut is advertised.
+	WorkingDirectory(property string) ShortcutBuilder
 	Arguments(args string) ShortcutBuilder
 	Description(desc string) ShortcutBuilder
+	// Icon selects an asset registered with PackageBuilder.Icon and a zero-based
+	// icon index within that asset (not a Win32 resource ID such as IDI_APPLICATION).
+	// An empty name removes the explicit icon. For an executable target, use a PE
+	// source containing icon resources and an asset name ending in .exe.
 	Icon(name string, index int16) ShortcutBuilder
-	// Advertised(targetFeature string) or non-advertised (target file ref)
+	// Advertised replaces the formatted target with a feature ID. Windows
+	// Installer checks that feature and launches the owning component's key file.
+	// Omit this call for an ordinary shortcut with an executable path as Target.
 	Advertised(featureID string) ShortcutBuilder
 }
 
@@ -422,6 +438,7 @@ type registryEntry struct {
 type shortcutEntry struct {
 	name, target, component string
 	directory               string // Shortcut.Directory_; defaults to INSTALLFOLDER
+	workingDirectory        string // Shortcut.WkDir; defaults to the component's directory
 	arguments, description  string
 	iconName                string
 	iconIndex               int16
@@ -969,6 +986,11 @@ type shortcutHandle struct {
 
 func (h *shortcutHandle) InDirectory(dirID string) ShortcutBuilder {
 	h.pkg.shortcutEntries[h.idx].directory = dirID
+	return h
+}
+
+func (h *shortcutHandle) WorkingDirectory(property string) ShortcutBuilder {
+	h.pkg.shortcutEntries[h.idx].workingDirectory = property
 	return h
 }
 
