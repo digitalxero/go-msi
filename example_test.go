@@ -47,6 +47,39 @@ func ExampleNewPackage() {
 	// Output: valid MSI: true
 }
 
+// Set "Start in" to the install root when the executable lives in a subdirectory.
+// Omitting WorkingDirectory (or passing "") would instead use BINDIR, the owning
+// component's directory. InDirectory only controls where the shortcut is placed.
+func ExampleShortcutBuilder_workingDirectory() {
+	b := msi.NewPackage().
+		WithProductName("Example App").
+		WithManufacturer("Example Co").
+		WithVersion("1.0.0").
+		WithProductCode("{11111111-2222-3333-4444-555555555555}").
+		InstallToProgramFiles()
+	c := b.RootDirectory("INSTALLFOLDER", "Example App").
+		Subdirectory("BINDIR", "bin").
+		Component("Main").AssociateToFeature("MainFeature")
+	// A placeholder payload keeps this serialization example self-contained.
+	// Use FileSourceFromPath with a real Windows executable for installation.
+	c.WithFile("app.exe", msi.FileSourceFromBytes([]byte("MZ example payload")))
+	c.Shortcut("Example App.lnk", "[BINDIR]app.exe").
+		InDirectory("ProgramMenuFolder").
+		WorkingDirectory("INSTALLFOLDER")
+	b.Feature("MainFeature").WithLevel(1)
+
+	pkg, err := b.Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := pkg.WriteMSI(&buf); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("valid MSI:", bytes.HasPrefix(buf.Bytes(), cfbMagic))
+	// Output: valid MSI: true
+}
+
 // AddTree harvests an fs.FS into the package, creating one component per file
 // under the given directory.
 func ExamplePackageBuilder_addTree() {

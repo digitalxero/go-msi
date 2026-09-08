@@ -41,22 +41,51 @@
 //		WithManufacturer("My Company").
 //		WithVersion("1.0.0").
 //		WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
-//		WithUpgradeCode("{ABCDEF01-2345-6789-ABCD-EF0123456789}")
+//		WithUpgradeCode("{ABCDEF01-2345-6789-ABCD-EF0123456789}").
+//		InstallToProgramFiles()
 //
 //	c := b.RootDirectory("INSTALLFOLDER", "My App").
 //		Component("Main").AssociateToFeature("MainFeature")
-//	c.WithFile("app.exe", appBytes)
+//	c.WithFile("app.exe", msi.FileSourceFromBytes(appBytes))
+//	c.Shortcut("My App.lnk", "[INSTALLFOLDER]app.exe").
+//		InDirectory("ProgramMenuFolder")
 //	b.Feature("MainFeature").WithTitle("Main Feature").WithLevel(1)
 //
 //	pkg, err := b.Build()
 //	if err != nil {
-//		// handle error
+//		panic(err)
 //	}
-//	out, _ := os.Create("MyApp.msi")
-//	defer out.Close()
-//	_ = pkg.WriteMSI(out)
+//	out, err := os.Create("MyApp.msi")
+//	if err != nil {
+//		panic(err)
+//	}
+//	writeErr := pkg.WriteMSI(out)
+//	closeErr := out.Close()
+//	if writeErr != nil {
+//		panic(writeErr)
+//	}
+//	if closeErr != nil {
+//		panic(closeErr)
+//	}
 //
 // See the package examples for signing, transforms, patches, and validation.
+//
+// # Shortcuts
+//
+// [ComponentBuilder.Shortcut] accepts an MSI formatted target such as
+// "[INSTALLFOLDER]app.exe" for ordinary executable shortcuts. Calling
+// [ShortcutBuilder.Advertised] instead targets a feature and launches the owning
+// component's key file. [ShortcutBuilder.InDirectory] selects where the shortcut
+// is placed. Its "Start in" directory defaults to the owning component's directory;
+// [ShortcutBuilder.WorkingDirectory] overrides it with a directory identifier or
+// property name, without brackets. An empty value restores the default.
+//
+// Register explicit icons with [PackageBuilder.Icon], then select the same name
+// and a zero-based index with [ShortcutBuilder.Icon]. A shortcut icon stream must
+// have EXE binary format and a name whose extension matches the target, as
+// specified by the [Windows Installer Icon table]. Reusing an application EXE
+// containing icon resources as a separate Icon stream increases package size.
+// See the [shortcut example] for a complete generator with error handling.
 //
 // # Non-goals
 //
@@ -65,4 +94,7 @@
 // patching, major-upgrade/schema-reorganizing patches, and authoring merge
 // modules (.msm) are out of scope. For MSIX/APPX packaging, see the companion
 // module go.digitalxero.dev/go-msix.
+//
+// [Windows Installer Icon table]: https://learn.microsoft.com/en-us/windows/win32/msi/icon-table
+// [shortcut example]: https://github.com/digitalxero/go-msi/tree/main/examples/shortcuts
 package msi

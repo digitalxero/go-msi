@@ -78,12 +78,11 @@ func main() {
 		Component("Main").AssociateToFeature("MainFeature")
 	c.WithFile("app.exe", app)
 
-	// An advertised Start Menu shortcut. Advertised targets the feature, so
-	// Windows Installer repairs the app if the key file goes missing.
-	c.Shortcut("My App.lnk", "").
+	// A normal executable shortcut. "Start in" defaults to this component's
+	// INSTALLFOLDER, even though the shortcut itself is in the Start Menu.
+	c.Shortcut("My App.lnk", "[INSTALLFOLDER]app.exe").
 		InDirectory("ProgramMenuFolder").
-		Description("Launch My App").
-		Advertised("MainFeature")
+		Description("Launch My App")
 
 	b.Feature("MainFeature").WithTitle("Main Feature").WithLevel(1)
 
@@ -92,9 +91,18 @@ func main() {
 		panic(err)
 	}
 
-	f, _ := os.Create("MyApp.msi")
-	defer f.Close()
-	_ = pkg.WriteMSI(f)
+	f, err := os.Create("MyApp.msi")
+	if err != nil {
+		panic(err)
+	}
+	writeErr := pkg.WriteMSI(f)
+	closeErr := f.Close()
+	if writeErr != nil {
+		panic(writeErr)
+	}
+	if closeErr != nil {
+		panic(closeErr)
+	}
 }
 ```
 
@@ -139,6 +147,68 @@ MSZIP cabinet whose members are keyed by the File-table primary keys.
 ICE validation runs by default on `Build()`/`WriteMSI()`; error-severity findings
 fail the build (`WithSkipValidation()` is the escape hatch). Use
 `msi.NewValidator().WithAllICEs().Build()` for explicit runs.
+
+### Shortcuts: target, "Start in", and icon
+
+For a normal executable target, use an MSI formatted path such as
+`[INSTALLFOLDER]app.exe` and omit `Advertised`. Windows Installer expands the
+directory property into the installed path. A `[#FileKey]` target also works,
+but requires the generated File-table key, not the filename.
+
+`WorkingDirectory` controls the shortcut's **Start in** field. It defaults to
+the owning component's directory, so the example above starts in
+`C:\Program Files\My App` without any extra configuration. `InDirectory` only
+controls where the `.lnk` is placed. To override the default, pass a directory
+identifier or property name containing a path:
+
+```go
+c.Shortcut("My App.lnk", "[INSTALLFOLDER]app.exe").
+	InDirectory("ProgramMenuFolder").
+	WorkingDirectory("INSTALLFOLDER") // Optional: this is already c's directory.
+```
+
+Pass `"INSTALLFOLDER"`, not `"[INSTALLFOLDER]"` or a literal filesystem path.
+Standard Windows Installer directory names such as `"PersonalFolder"` are
+added automatically. A custom property must resolve to a path during
+installation. `WorkingDirectory("")` restores the component-directory default.
+
+An advertised shortcut instead uses `Advertised("MainFeature")` with an empty
+target: `c.Shortcut("My App.lnk", "").Advertised("MainFeature")`. It launches
+the component's key file and lets Windows Installer check the feature before
+launching. See Microsoft's [Shortcut table reference](https://learn.microsoft.com/en-us/windows/win32/msi/shortcut-table).
+
+For an explicit shortcut icon, register the icon stream on the package and
+reference that same name on the shortcut:
+
+```go
+// app is the FileSource for an app.exe that already contains an icon resource.
+b.Icon("app.exe", app)
+c.Shortcut("My App.lnk", "[INSTALLFOLDER]app.exe").
+	InDirectory("ProgramMenuFolder").
+	Icon("app.exe", 0)
+```
+
+The name identifies a package Icon-table entry, not a path or a Windows stock
+icon. The index is zero-based; `0` selects the first icon. `IDI_APPLICATION` is
+a Win32 resource identifier, not that index. `Icon("", 0)` leaves the shortcut
+without an explicit Icon-table reference.
+
+Microsoft requires shortcut icon streams to use EXE binary format and a name
+whose extension matches the target's extension. For an `.exe` target, use an
+icon-bearing executable registered under a name ending in `.exe`; renaming a
+raw `.ico` does not convert its format. See the [Icon table requirements](https://learn.microsoft.com/en-us/windows/win32/msi/icon-table).
+The snippet reuses the application executable as a separate Icon stream,
+which increases package size. A Go executable does not automatically contain
+an application icon; add the icon resource when building it, or supply a
+separate executable containing the icon resources.
+
+The complete [shortcut example](examples/shortcuts/main.go) generates an MSI
+with an executable target, explicit icon, and the default working directory.
+Run it from this repository with an icon-bearing Windows executable:
+
+```sh
+go run ./examples/shortcuts /path/to/app.exe MyApp.msi
+```
 
 ### Target platform
 

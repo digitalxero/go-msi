@@ -126,11 +126,13 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 	// Ensure any directory referenced by a shortcut exists before the Directory
 	// table is emitted. Standard Windows Installer directories (ProgramMenuFolder,
 	// DesktopFolder, …) are created on demand under TARGETDIR so shortcuts can be
-	// placed in them without the caller declaring them.
+	// placed in them or use them as working directories without the caller
+	// declaring them.
 	for _, e := range p.shortcutEntries {
 		if e.directory != "" {
 			ensureStandardDirectory(p, e.directory)
 		}
+		ensureStandardDirectory(p, e.workingDirectory)
 	}
 
 	db := newMSIDatabaseBuilder()
@@ -434,8 +436,12 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			if dir == "" {
 				dir = "INSTALLFOLDER"
 			}
+			workingDir := e.workingDirectory
+			if c := p.compEntries[e.component]; workingDir == "" && c != nil {
+				workingDir = c.dirID
+			}
 			row := newMSIRowBuilder().WithColumns(scTbl.columns()...).
-				WithValues(scID, dir, e.name, e.component, target, e.arguments, e.description, nil, iconName, iconIndex, int16(1), "").Build()
+				WithValues(scID, dir, e.name, e.component, target, e.arguments, e.description, nil, iconName, iconIndex, int16(1), workingDir).Build()
 			if err := scTbl.addRow(row); err != nil {
 				return nil, fmt.Errorf("msi compile: Shortcut row %s: %w", scID, err)
 			}
