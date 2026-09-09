@@ -140,6 +140,35 @@ func ExampleNewValidator() {
 	// Output: error findings: 0
 }
 
+// Open a built package and inspect its tables. Open decodes every listed
+// table into rows keyed by column name, which makes assertions on generated
+// packages precise: here the Property table is checked for the product
+// identity and the SummaryInformation Template for the platform.
+func ExampleOpen() {
+	var buf bytes.Buffer
+	if err := buildExamplePackage().WriteMSI(&buf); err != nil {
+		log.Fatal(err)
+	}
+
+	db, err := msi.Open(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		log.Fatal(err)
+	}
+	props, err := db.Table("Property")
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, row := range props {
+		if row["Property"] == "ProductName" {
+			fmt.Println("ProductName:", row["Value"])
+		}
+	}
+	fmt.Println("Template:", db.Summary().Template())
+	// Output:
+	// ProductName: Example App
+	// Template: x64;1033
+}
+
 // Build a standalone .mst transform from the difference between two packages.
 func ExampleNewTransform() {
 	base := buildExamplePackage()
