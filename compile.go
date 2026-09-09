@@ -468,8 +468,16 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			if c := p.compEntries[e.component]; workingDir == "" && c != nil {
 				workingDir = c.dirID
 			}
+			// Shortcut.Name is a Filename column: a name that is not a valid 8.3
+			// short name needs the short|long form, from the namer of the
+			// directory the shortcut is created in (it shares that directory's
+			// namespace with any files installed there).
+			nameColumn, err := namerFor(dir).msiFileNameColumn(e.name)
+			if err != nil {
+				return nil, fmt.Errorf("msi compile: Shortcut %s name %q: %w", scID, e.name, err)
+			}
 			row := newMSIRowBuilder().WithColumns(scTbl.columns()...).
-				WithValues(scID, dir, e.name, e.component, target, e.arguments, e.description, nil, iconName, iconIndex, int16(1), workingDir).Build()
+				WithValues(scID, dir, nameColumn, e.component, target, e.arguments, e.description, nil, iconName, iconIndex, int16(1), workingDir).Build()
 			if err := scTbl.addRow(row); err != nil {
 				return nil, fmt.Errorf("msi compile: Shortcut row %s: %w", scID, err)
 			}

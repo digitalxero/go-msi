@@ -116,12 +116,14 @@ func TestShortcut_WorkingDirectory_RoundTrip(t *testing.T) {
 			scTbl, err := db.GetTable("Shortcut")
 			require.NoError(t, err)
 			require.Len(t, scTbl.rows(), 4)
-			for _, name := range []string{"App.lnk", "Advertised.lnk"} {
+			// Shortcut.Name is a Filename column, so names that are not valid
+			// 8.3 names carry the short|long form.
+			for _, name := range []string{"App.lnk", "ADVERT~1.LNK|Advertised.lnk"} {
 				row := findRow(t, scTbl, 2, name)
 				assert.Equal(t, "ProgramMenuFolder", row[1], "shortcut placement is independent")
 				assert.Equal(t, tt.want, row[11], "Start in uses a raw directory/property name")
 				assert.Equal(t, "--launch", row[5])
-				if name == "Advertised.lnk" {
+				if name == "ADVERT~1.LNK|Advertised.lnk" {
 					assert.Equal(t, "F", row[4])
 				} else {
 					assert.Equal(t, "[BINDIR]app.exe", row[4])
@@ -142,4 +144,39 @@ func TestShortcut_WorkingDirectory_RoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestShortcut_Name_ShortLongForm proves Shortcut.Name gets the short|long
+// Filename form when the name is not a valid 8.3 name (spaces, long names),
+// and stays bare when it is.
+func TestShortcut_Name_ShortLongForm(t *testing.T) {
+	b := NewPackage().
+		WithProductCode("{12345678-1234-1234-1234-123456789ABC}").
+		WithProductName("SC Name").
+		WithManufacturer("go-msix").
+		WithVersion("1.0.0")
+	c := b.RootDirectory("INSTALLFOLDER", "App").Component("Main").AssociateToFeature("F")
+	c.WithFile("app.exe", FileSourceFromBytes([]byte("MZ")))
+	c.Shortcut("My Test Application", "[#app.exe]").InDirectory("ProgramMenuFolder")
+	c.Shortcut("My Test Application Two", "[#app.exe]").InDirectory("ProgramMenuFolder")
+	c.Shortcut("APP.LNK", "[#app.exe]").InDirectory("DesktopFolder")
+	b.Feature("F").WithLevel(1)
+
+	pkg, err := b.Build()
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, pkg.WriteMSI(&buf))
+
+	db, err := readMSIDatabase(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	scTbl, err := db.GetTable("Shortcut")
+	require.NoError(t, err)
+	var names []string
+	for _, r := range scTbl.rows() {
+		name, _ := r.values()[2].(string)
+		names = append(names, name)
+	}
+	assert.Contains(t, names, "MYTEST~1|My Test Application")
+	assert.Contains(t, names, "MYTEST~2|My Test Application Two", "sibling shortcuts in one directory get distinct short names")
+	assert.Contains(t, names, "APP.LNK", "a valid 8.3 name stays bare")
 }
