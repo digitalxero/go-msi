@@ -30,7 +30,7 @@ jobs:
           # Third-party apt sources on the hosted runner (Google Chrome in
           # particular) intermittently fail with "Hash Sum mismatch" and abort
           # the whole update; none of them are needed here.
-          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list /etc/apt/sources.list.d/microsoft-*.list
+          sudo grep -rlE 'dl\.google\.com|packages\.microsoft\.com' /etc/apt/sources.list.d/ | xargs -r sudo rm -f
           sudo apt-get update && sudo apt-get install -y --no-install-recommends msitools cabextract osslsigncode
 
       - name: Cross-check MSI output against msitools + cabextract
