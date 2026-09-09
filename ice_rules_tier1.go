@@ -295,38 +295,85 @@ func runICE05(ctx *iceContext) []Finding {
 	return findings
 }
 
-// runICE18: Component.KeyPath (if set) must be a File belonging to this component.
+// iceComponentKeyPathColumn is the index of Component.KeyPath (Component,
+// ComponentId, Directory_, Attributes, Condition, KeyPath).
+const iceComponentKeyPathColumn = 5
+
+// runICE18: Component.KeyPath (if set) must name a resource this component
+// owns, in the table selected by the Attributes bits: a Registry row when
+// RegistryKeyPath is set, an ODBCDataSource row when ODBCDataSource is set,
+// otherwise a File row. Windows Installer resolves KeyPath the same way, so a
+// registry KeyPath without the bit is looked up in the File table and fails at
+// install time.
 func runICE18(ctx *iceContext) []Finding {
 	var findings []Finding
-	// Build quick index of file -> component for our emitted files.
-	fileToComp := map[string]string{}
-	for _, fr := range ctx.rowsOf("File") {
-		fvals := fr.values()
-		if len(fvals) > 1 {
-			if fid, ok := fvals[0].(string); ok {
-				if comp, ok := fvals[1].(string); ok {
-					fileToComp[fid] = comp
-				}
+	// Build quick indexes of key -> owning component for each key-path table.
+	ownerIndex := func(table string, keyCol, compCol int) map[string]string {
+		idx := map[string]string{}
+		for _, r := range ctx.rowsOf(table) {
+			vals := r.values()
+			if len(vals) <= keyCol || len(vals) <= compCol {
+				continue
+			}
+			key, ok1 := vals[keyCol].(string)
+			comp, ok2 := vals[compCol].(string)
+			if ok1 && ok2 {
+				idx[key] = comp
 			}
 		}
+		return idx
 	}
+	// File: File, Component_, …; Registry: Registry, Root, Key, Name, Value,
+	// Component_; ODBCDataSource: DataSource, Component_, ….
+	fileToComp := ownerIndex("File", 0, 1)
+	regToComp := ownerIndex("Registry", 0, 5)
+	odbcToComp := ownerIndex("ODBCDataSource", 0, 1)
+	_, odbcErr := ctx.db.GetTable("ODBCDataSource")
+	hasODBC := odbcErr == nil
+
 	for _, r := range ctx.rowsOf("Component") {
 		vals := r.values()
-		if len(vals) > 4 {
-			if kp, ok := vals[4].(string); ok && kp != "" {
-				if c, ok := vals[0].(string); ok {
-					if owner, has := fileToComp[kp]; !has || owner != c {
-						findings = append(findings, &msiFinding{
-							ice:     "ICE18",
-							sev:     SeverityError,
-							table:   "Component",
-							column:  "KeyPath",
-							rowKeys: rowPKs(r),
-							message: fmt.Sprintf("KeyPath %q is not a file of this component", kp),
-						})
-					}
-				}
+		if len(vals) <= iceComponentKeyPathColumn {
+			continue
+		}
+		kp, ok := vals[iceComponentKeyPathColumn].(string)
+		if !ok || kp == "" {
+			continue
+		}
+		c, ok := vals[0].(string)
+		if !ok {
+			continue
+		}
+		attrs := iceInt16(vals[3])
+		var (
+			table string
+			owner string
+			has   bool
+		)
+		switch {
+		case attrs&msidbComponentAttributesRegistryKeyPath != 0:
+			table = "Registry"
+			owner, has = regToComp[kp]
+		case attrs&msidbComponentAttributesODBCDataSource != 0:
+			if !hasODBC {
+				// The catalog has no ODBCDataSource table to check against.
+				continue
 			}
+			table = "ODBCDataSource"
+			owner, has = odbcToComp[kp]
+		default:
+			table = "File"
+			owner, has = fileToComp[kp]
+		}
+		if !has || owner != c {
+			findings = append(findings, &msiFinding{
+				ice:     "ICE18",
+				sev:     SeverityError,
+				table:   "Component",
+				column:  "KeyPath",
+				rowKeys: rowPKs(r),
+				message: fmt.Sprintf("KeyPath %q is not a %s row of this component (Attributes 0x%X select the %s table)", kp, table, attrs, table),
+			})
 		}
 	}
 	return findings
@@ -384,8 +431,8 @@ func runICE92(ctx *iceContext) []Finding {
 			cid, _ := vals[0].(string)
 			guid, _ := vals[1].(string)
 			kp := ""
-			if len(vals) > 4 {
-				if k, ok := vals[4].(string); ok {
+			if len(vals) > iceComponentKeyPathColumn {
+				if k, ok := vals[iceComponentKeyPathColumn].(string); ok {
 					kp = k
 				}
 			}

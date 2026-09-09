@@ -1,6 +1,7 @@
 package msi
 
 import (
+	"cmp"
 	"crypto/md5"
 	"encoding/binary"
 	"encoding/hex"
@@ -152,6 +153,11 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 	// properties: the Property.Value column is non-nullable in the catalog
 	// and the internal row validator rejects the empty value (even though
 	// the legacy path always derives a ProductCode).
+	for _, k := range msiBuilderOwnedProperties {
+		if _, ok := p.props[k]; ok {
+			return nil, fmt.Errorf("msi compile: property %q is set by the package builder (use WithProductName/WithVersion/WithManufacturer/WithProductCode/WithUpgradeCode/WithAllUsers); remove it from WithProperty", k)
+		}
+	}
 	idProps := map[string]string{}
 	if p.productName != "" {
 		idProps["ProductName"] = p.productName
@@ -219,8 +225,20 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 		sort.Strings(children[pid])
 	}
 
-	// Per-directory shortname generators...
+	// Per-directory shortname generators. A directory's namer owns the 8.3
+	// namespace of everything that lives *inside* it: its files and the
+	// DefaultDir of each child directory. Keying the child DefaultDir by the
+	// parent's ID is what keeps siblings such as MyLongDirectoryA and
+	// MyLongDirectoryB from both becoming MYLONG~1.
 	dirNamers := make(map[string]*msiShortNamer)
+	namerFor := func(dirID string) *msiShortNamer {
+		n := dirNamers[dirID]
+		if n == nil {
+			n = newMSIShortNamer()
+			dirNamers[dirID] = n
+		}
+		return n
+	}
 
 	var emitDir func(id string) error
 	emitDir = func(id string) error {
@@ -241,13 +259,8 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			// through the 8.3 shortname generator.
 			ddColumn = "."
 		} else {
-			namer := dirNamers[id]
-			if namer == nil {
-				namer = newMSIShortNamer()
-				dirNamers[id] = namer
-			}
 			var err error
-			ddColumn, err = namer.msiFileNameColumn(dd)
+			ddColumn, err = namerFor(e.parent).msiFileNameColumn(dd)
 			if err != nil {
 				return fmt.Errorf("msi compile: Directory %s DefaultDir %q: %w", id, dd, err)
 			}
@@ -295,7 +308,8 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 	// 3. Components + files (basic wiring for P1G2-031).
 	// Components and their attached files are emitted in sorted component ID
 	// order for determinism. GUIDs are derived via msiGUIDv5 when not
-	// supplied (stable seed including product + dir + comp id). If a
+	// supplied (stable seed including upgrade code + platform + dir + comp
+	// id, see below). If a
 	// component declares files and has no explicit KeyPath we use the ID of
 	// its first file (common case, satisfies ICE18/92 for the emitted shape).
 	// File IDs use generateMSIFileID over a logical path seed + content
@@ -330,7 +344,19 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 		e := p.compEntries[cid]
 		g := e.guid
 		if g == "" {
-			seed := "component|" + p.productCode + "|" + e.dirID + "|" + cid
+			// The Windows Installer component rules require a component's GUID
+			// to stay the same for as long as it installs the same resource to
+			// the same location, across every release of the product. The
+			// ProductCode changes with every release, so it must not be part
+			// of the seed; the UpgradeCode is the identity that survives
+			// releases. The platform is included because the same UpgradeCode
+			// is commonly shared by the x86 and x64 builds of a product, whose
+			// components are distinct resources (different files, different
+			// registry views) and must not share GUIDs. Packages without an
+			// UpgradeCode fall back to the ProductCode, which is the only
+			// identity they have.
+			seed := "component|" + cmp.Or(p.upgradeCode, p.productCode) + "|" +
+				p.platformOrDefault().String() + "|" + e.dirID + "|" + cid
 			if gg, err := msiGUIDv5(msiPackageNamespaceGUID, seed); err == nil {
 				g = gg
 			} else {
@@ -350,6 +376,13 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 		if !e.attrsSet && p.platformOrDefault().isWin64() {
 			attrs |= msidbComponentAttributes64bit
 		}
+		// A KeyPath naming a Registry row is only read as one when the
+		// RegistryKeyPath bit is set; without it Windows Installer looks the
+		// value up in the File table. The bit is a consequence of AsKeyPath,
+		// not a caller preference, so it is added even to explicit attributes.
+		if e.asKeyPathRegistry && kp != nil {
+			attrs |= msidbComponentAttributesRegistryKeyPath
+		}
 		db.WithComponent(cid, g, e.dirID, attrs, kp)
 
 		for _, f := range e.files {
@@ -360,12 +393,7 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			// File.FileName column gets the short|long form from the *directory's*
 			// namer (not a global one). This matches how real MSIs and the
 			// legacy flat path (per-dir in tree model) behave.
-			fnamer := dirNamers[e.dirID]
-			if fnamer == nil {
-				fnamer = newMSIShortNamer()
-				dirNamers[e.dirID] = fnamer
-			}
-			fileNameColumn, err := fnamer.msiFileNameColumn(f.name)
+			fileNameColumn, err := namerFor(e.dirID).msiFileNameColumn(f.name)
 			if err != nil {
 				return nil, fmt.Errorf("msi compile: File %s name %q: %w", fid, f.name, err)
 			}

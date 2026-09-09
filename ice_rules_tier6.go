@@ -62,28 +62,6 @@ func runICE08(ctx *iceContext) []Finding {
 
 // --- ICE09: components installed to a system directory should be permanent ---
 
-// The documented Component.Attributes bits (Microsoft Learn). LocalOnly is the
-// absence of every bit and so has no constant.
-const (
-	msidbComponentAttributesSourceOnly        int16 = 0x0001
-	msidbComponentAttributesOptional          int16 = 0x0002
-	msidbComponentAttributesRegistryKeyPath   int16 = 0x0004
-	msidbComponentAttributesSharedDllRefCount int16 = 0x0008
-	msidbComponentAttributesPermanent         int16 = 0x0010
-	msidbComponentAttributesODBCDataSource    int16 = 0x0020
-	msidbComponentAttributesTransitive        int16 = 0x0040
-	msidbComponentAttributesNeverOverwrite    int16 = 0x0080
-	// msidbComponentAttributes64bit marks a component as 64-bit: its files go to
-	// the 64-bit locations and its registry rows to the 64-bit view rather than
-	// through WOW6432Node redirection. Only legal in a 64-bit package.
-	msidbComponentAttributes64bit int16 = 0x0100
-	// msidbComponentAttributesDisableRegistryReflection is only meaningful on
-	// 64-bit Windows and therefore only in a 64-bit package.
-	msidbComponentAttributesDisableRegistryReflection int16 = 0x0200
-	msidbComponentAttributesUninstallOnSupersedence   int16 = 0x0400
-	msidbComponentAttributesShared                    int16 = 0x0800
-)
-
 // The documented File.Attributes bits (Microsoft Learn).
 // msidbFileAttributesPatchAdded (0x1000) is declared in patch_transform.go.
 const (
@@ -374,23 +352,34 @@ var msi64BitDirectories = map[string]bool{
 	"ProgramFiles64Folder": true, "System64Folder": true, "CommonFiles64Folder": true,
 }
 
-// runICE80 cross-checks the SummaryInformation Template platform against the
-// package's 64-bit content. Windows Installer requires a package that uses any
-// 64-bit feature — 64-bit components, the *64Folder standard directories,
-// 64-bit script custom actions, or 64-bit registry searches — to declare a
-// 64-bit platform (x64, Intel64 or Arm64) in its Template.
+// msi32BitDirectories are the standard directories that always resolve to the
+// 32-bit location (Program Files (x86), SysWOW64 on 64-bit Windows). A 64-bit
+// component installed directly into one of them is an ICE80 error regardless
+// of the Template platform.
+var msi32BitDirectories = map[string]bool{
+	"ProgramFilesFolder": true, "CommonFilesFolder": true, "SystemFolder": true,
+}
+
+// runICE80 cross-checks the package's 64-bit content in both directions: a
+// 64-bit component must not live in a 32-bit-only standard directory, and a
+// package that uses any 64-bit feature — 64-bit components, the *64Folder
+// standard directories, 64-bit script custom actions, or 64-bit registry
+// searches — must declare a 64-bit platform (x64, Intel64 or Arm64) in its
+// SummaryInformation Template.
 func runICE80(ctx *iceContext) []Finding {
+	findings := ice80ComponentDirectories(ctx)
+
 	// A patch's PID7 is a ProductCode list, not a platform; it carries no
 	// platform claim to check against.
 	if ctx.summary.Template == "" || templateIsProductCodeList(ctx.summary.Template) {
-		return nil
+		return findings
 	}
 	plat, _, err := parseTemplate(ctx.summary.Template)
 	if err != nil {
-		return nil // ICE39 already reports a malformed Template
+		return findings // ICE39 already reports a malformed Template
 	}
 	if plat.isWin64() {
-		return nil
+		return findings
 	}
 
 	// declared is what the Template claims, for the message. A blank platform
@@ -406,7 +395,6 @@ func runICE80(ctx *iceContext) []Finding {
 		}
 	}
 
-	var findings []Finding
 	for _, r := range ctx.rowsOf("Component") {
 		v := r.values()
 		if len(v) < 4 {
@@ -454,6 +442,28 @@ func runICE80(ctx *iceContext) []Finding {
 		if iceInt16(v[4])&msidbLocatorType64bit != 0 {
 			findings = append(findings, finding("RegLocator", "Type", r,
 				fmt.Sprintf("registry search %q reads the 64-bit registry view", sig)))
+		}
+	}
+	return findings
+}
+
+// ice80ComponentDirectories reports every 64-bit component whose Directory_ is
+// one of the 32-bit-only standard directories ("This 64BitComponent uses
+// 32BitDirectory" in Microsoft's ICE80).
+func ice80ComponentDirectories(ctx *iceContext) []Finding {
+	var findings []Finding
+	for _, r := range ctx.rowsOf("Component") {
+		v := r.values()
+		if len(v) < 4 {
+			continue
+		}
+		comp, _ := v[0].(string)
+		dir, _ := v[2].(string)
+		if iceInt16(v[3])&msidbComponentAttributes64bit != 0 && msi32BitDirectories[dir] {
+			findings = append(findings, &msiFinding{
+				ice: "ICE80", sev: SeverityError, table: "Component", column: "Directory_", rowKeys: rowPKs(r),
+				message: fmt.Sprintf("64-bit component %q uses 32-bit directory %q; use the matching 64-bit standard directory or clear the 64-bit attribute", comp, dir),
+			})
 		}
 	}
 	return findings

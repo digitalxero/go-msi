@@ -148,7 +148,9 @@ func buildRTExpectedDB(t *testing.T) msiDatabase {
 	db.WithDirectory("TARGETDIR", "", "SourceDir")
 	db.WithDirectory("INSTALLFOLDER", "TARGETDIR", installDirName)
 
-	componentGUID, err := msiGUIDv5(msiPackageNamespaceGUID, "component|"+cfg.ProductCode+"|INSTALLFOLDER|MainComponent")
+	// No UpgradeCode in the fixture, so the component seed falls back to the
+	// ProductCode; the default platform (x64) is always part of the seed.
+	componentGUID, err := msiGUIDv5(msiPackageNamespaceGUID, "component|"+cfg.ProductCode+"|x64|INSTALLFOLDER|MainComponent")
 	require.NoError(t, err)
 	db.WithComponent("MainComponent", componentGUID, "INSTALLFOLDER", msidbComponentAttributes64bit, staged[0].id)
 	db.WithFeature("MainFeature", "Main Feature", "", 2, 1)
