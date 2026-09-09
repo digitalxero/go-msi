@@ -16,7 +16,12 @@ jobs:
       - name: Unit tests (race)
         run: go test -race -count=1 ./...
       - name: Install MSI verification tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends msitools cabextract osslsigncode
+        run: |
+          # Third-party apt sources on the hosted runner (Google Chrome in
+          # particular) intermittently fail with "Hash Sum mismatch" and abort
+          # the whole update; none of them are needed here.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*.list /etc/apt/sources.list.d/microsoft-*.list
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends msitools cabextract osslsigncode
       - name: Cross-check MSI/MSP against msitools + cabextract + osslsigncode
         run: ./scripts/verify_msi.sh
 
