@@ -17,7 +17,9 @@ GOWORK=off go run ./internal/compatfixture /tmp/msi-compatibility/fixture
 The Windows job uses Go 1.26.4 and Windows SDK 10.0.26100.9457. The official SDK
 installer has SHA-256
 `b0bdbad38ae74c40ccae8cdbcf229807627fba2bc3100be28301c4ba884f755e`
-and must have a valid Microsoft Authenticode signature. Missing `msival2.exe` or
+and must have a valid Microsoft Authenticode signature. The job installs the
+SDK’s separate `MsiVal2-x86_en-us.msi` package, then extracts that exact package
+to obtain the validation executable and suite. Missing `msival2.exe` or
 `Darice.cub` fails provisioning; no ICE selection or error suppression is used.
 Tool hashes/versions, fixture files, and setup/ICE/installation logs are uploaded
 even when a check fails. Installation occurs only on a disposable elevated
