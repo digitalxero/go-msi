@@ -9,7 +9,6 @@ jobs:
   windows-compatibility:
     runs-on: windows-2022
     env:
-      COMPATIBILITY_OUTPUT: ${{ runner.temp }}/msi-compatibility
       CI_PROJECT_DIR: ${{ github.workspace }}
       GOWORK: "off"
       GOMAXPROCS: "2"
@@ -18,6 +17,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.4"
+      - name: Set compatibility output directory
+        shell: pwsh
+        run: '"COMPATIBILITY_OUTPUT=$env:RUNNER_TEMP/msi-compatibility" | Out-File $env:GITHUB_ENV -Append -Encoding utf8'
       - name: Install pinned Microsoft Installer SDK
         shell: pwsh
         run: ./scripts/install_windows_sdk.ps1
