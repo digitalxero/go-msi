@@ -6,6 +6,32 @@ on:
   pull_request:
 
 jobs:
+  windows-compatibility:
+    runs-on: windows-2022
+    env:
+      CI_PROJECT_DIR: ${{ github.workspace }}
+      GOWORK: "off"
+      GOMAXPROCS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+      - name: Set compatibility output directory
+        shell: pwsh
+        run: '"COMPATIBILITY_OUTPUT=$env:RUNNER_TEMP/msi-compatibility" | Out-File $env:GITHUB_ENV -Append -Encoding utf8'
+      - name: Install pinned Microsoft Installer SDK
+        shell: pwsh
+        run: ./scripts/install_windows_sdk.ps1
+      - name: Full Darice ICE and real Windows Installer consumer
+        shell: pwsh
+        run: ./scripts/verify_windows.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-msi-compatibility
+          path: ${{ runner.temp }}/msi-compatibility
+
   test:
     runs-on: ubuntu-latest
     steps:

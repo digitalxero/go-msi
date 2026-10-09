@@ -22,3 +22,6 @@ go.work
 
 # Claude Code session artifacts
 .claude/
+
+.tools/
+compatibility-results/
