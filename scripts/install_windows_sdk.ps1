@@ -26,9 +26,31 @@ $env:PATH = $sdkBin + ';' + $env:PATH
 # version and keep its tools in an isolated administrative image.
 $msivalPackage = Join-Path $sdkRoot 'bin\10.0.26100.0\x86\MsiVal2-x86_en-us.msi'
 if (-not (Test-Path $msivalPackage)) { throw "SDK MsiVal2 installer missing: $msivalPackage" }
-$msivalInstallLog = Join-Path $logs 'msival2-install.log'
-$p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/i `"$msivalPackage`" /qn /norestart /L*V `"$msivalInstallLog`""
-if ($p.ExitCode -notin @(0, 3010)) { throw "MsiVal2 installation failed: $($p.ExitCode)" }
+# Orca supplies the COM validation engine used by MsiVal2. Install both packages
+# from the pinned SDK so the executable and registered engine stay in sync.
+$orcaPackage = Join-Path $sdkRoot 'bin\10.0.26100.0\x86\Orca-x86_en-us.msi'
+foreach ($package in @($msivalPackage, $orcaPackage)) {
+  if (-not (Test-Path $package)) { throw "SDK validation package missing: $package" }
+  $installLog = Join-Path $logs (([System.IO.Path]::GetFileNameWithoutExtension($package)) + '-install.log')
+  $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/i `"$package`" /qn /norestart /L*V `"$installLog`""
+  if ($p.ExitCode -notin @(0, 3010)) { throw "SDK validation package installation failed: $package ($($p.ExitCode))" }
+}
+# Probe the 32-bit COM registration in the same architecture as MsiVal2.
+# Preserve the HRESULT so a setup failure cannot masquerade as an ICE failure.
+$comProbe = @'
+try {
+  $type = [Type]::GetTypeFromProgID('MSI.EVALCOM2.1', $true)
+  $engine = [Activator]::CreateInstance($type)
+  [Runtime.InteropServices.Marshal]::ReleaseComObject($engine) | Out-Null
+  'EVALCOM2_READY'
+} catch {
+  $cause = $_.Exception.GetBaseException()
+  Write-Error ("EvalCom2 activation failed: {0} (HRESULT 0x{1:X8})" -f $cause.Message, $cause.HResult)
+  exit 1
+}
+'@
+& "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Sta -Command $comProbe 2>&1 | Tee-Object -FilePath (Join-Path $logs 'evalcom2-preflight.log')
+if ($LASTEXITCODE -ne 0) { throw '32-bit EvalCom2 activation failed; see preflight log' }
 $msivalRoot = Join-Path $tools 'msival2'
 $msivalExtractLog = Join-Path $logs 'msival2-extract.log'
 $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/a `"$msivalPackage`" /qn /norestart TARGETDIR=`"$msivalRoot`" /L*V `"$msivalExtractLog`""
@@ -40,7 +62,7 @@ $msival = $msival[0]
 $darice = $darice[0]
 $env:UPB_MSIVAL2 = $msival.FullName
 $env:UPB_DARICE_CUB = $darice.FullName
-Get-FileHash $msivalPackage, $msival.FullName, $darice.FullName | Format-Table | Out-File (Join-Path $logs 'ice-tools.txt')
+Get-FileHash $msivalPackage, $orcaPackage, $msival.FullName, $darice.FullName | Format-Table | Out-File (Join-Path $logs 'ice-tools.txt')
 if ($env:GITHUB_ENV) {
   "UPB_MSIVAL2=$($msival.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
   "UPB_DARICE_CUB=$($darice.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
