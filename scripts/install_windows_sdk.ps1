@@ -39,7 +39,9 @@ foreach ($package in @($msivalPackage, $orcaPackage)) {
 # Preserve the HRESULT so a setup failure cannot masquerade as an ICE failure.
 $comProbe = @'
 try {
-  $type = [Type]::GetTypeFromProgID('MSI.EVALCOM2.1', $true)
+  # EvalCom2 exposes C/C++ interfaces; the SDK registers its documented CLSID,
+  # without a top-level automation ProgID mapping.
+  $type = [Type]::GetTypeFromCLSID([guid]'{6E5E1910-8053-4660-B795-6B612E29BC58}', $true)
   $engine = [Activator]::CreateInstance($type)
   [Runtime.InteropServices.Marshal]::ReleaseComObject($engine) | Out-Null
   'EVALCOM2_READY'
@@ -49,7 +51,8 @@ try {
   exit 1
 }
 '@
-& "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Sta -Command $comProbe 2>&1 | Tee-Object -FilePath (Join-Path $logs 'evalcom2-preflight.log')
+$encodedProbe = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($comProbe))
+& "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Sta -EncodedCommand $encodedProbe 2>&1 | Tee-Object -FilePath (Join-Path $logs 'evalcom2-preflight.log')
 if ($LASTEXITCODE -ne 0) { throw '32-bit EvalCom2 activation failed; see preflight log' }
 $msivalRoot = Join-Path $tools 'msival2'
 $msivalExtractLog = Join-Path $logs 'msival2-extract.log'
