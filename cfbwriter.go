@@ -94,14 +94,17 @@ func serializeMSIStreams(db msiDatabase, summary msiSummaryInfo, opts cabBuildOp
 		if err != nil {
 			return nil, err
 		}
-		pool.addString(tname)
-		for _, col := range tbl.columns() {
-			pool.addString(col.name())
-		}
+		// Names are already represented by cells in _Tables and _Columns.
+		// Only actual string cells contribute references to the pool.
 		for _, r := range tbl.rows() {
 			for _, v := range r.values() {
-				if s, ok := v.(string); ok {
+				switch s := v.(type) {
+				case string:
 					pool.addString(s)
+				case *string:
+					if s != nil {
+						pool.addString(*s)
+					}
 				}
 			}
 		}
