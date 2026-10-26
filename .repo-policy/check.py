@@ -63,6 +63,10 @@ def main():
             base, head, title = pr["base"]["sha"], pr["head"]["sha"], pr["title"]
         else:
             base, head = event.get("before"), event.get("after")
+            if event.get("forced"):
+                # A rebased-away before SHA is not in checkout's reachable
+                # history. Audit the entire post-adoption history instead.
+                base = None
     if os.environ.get("GITLAB_CI"):
         base = os.environ.get("CI_MERGE_REQUEST_DIFF_BASE_SHA") or os.environ.get("CI_COMMIT_BEFORE_SHA")
         head = os.environ.get("CI_COMMIT_SHA")
