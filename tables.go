@@ -528,6 +528,9 @@ func (t *msiTableData) addRow(r msiRow) error {
 }
 
 func (t *msiTableData) validate() error {
+	if err := validateMSIColumnCount(len(t.cols)); err != nil {
+		return err
+	}
 	if t.n == "" {
 		return fmt.Errorf("table name cannot be empty")
 	}
@@ -1109,6 +1112,9 @@ func storedMSICellValue(val any, ct msiColumnType, pool *msiStringPool) (uint32,
 // tuples are rejected. Empty tables produce no bytes (the stream is omitted).
 func serializeRealTableData(tbl msiTable, pool *msiStringPool) ([]byte, error) {
 	cols := tbl.columns()
+	if err := validateMSIColumnCount(len(cols)); err != nil {
+		return nil, fmt.Errorf("table %s: %w", tbl.name(), err)
+	}
 	rowsList := tbl.rows()
 	if len(rowsList) == 0 {
 		return nil, nil
@@ -1170,6 +1176,16 @@ func serializeRealTableData(tbl msiTable, pool *msiStringPool) ([]byte, error) {
 		}
 	}
 	return buf.Bytes(), nil
+}
+
+// Windows Installer rejects the 32nd column, including in empty tables.
+const maxMSITableColumns = 31
+
+func validateMSIColumnCount(count int) error {
+	if count > maxMSITableColumns {
+		return fmt.Errorf("%d columns exceed the Windows Installer limit of %d", count, maxMSITableColumns)
+	}
+	return nil
 }
 
 // compareMSIKeyTuples compares two stored key tuples element-wise (unsigned),

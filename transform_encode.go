@@ -57,6 +57,9 @@ type transformRow struct {
 // transformRowMask computes the 16-bit mask for one delta row and the ordered
 // list of column indexes whose cells must be serialized after it.
 func transformRowMask(cols []msiColumn, r transformRow) (uint16, []int, error) {
+	if err := validateMSIColumnCount(len(cols)); err != nil {
+		return 0, nil, fmt.Errorf("transform: %w", err)
+	}
 	switch r.op {
 	case transformDelete:
 		var present []int
@@ -68,9 +71,6 @@ func transformRowMask(cols []msiColumn, r transformRow) (uint16, []int, error) {
 		return 0, present, nil
 
 	case transformInsert:
-		if len(cols) > 0xff {
-			return 0, nil, fmt.Errorf("transform: %d columns exceed the 255-column full-row mask limit", len(cols))
-		}
 		present := make([]int, len(cols))
 		for i := range cols {
 			present[i] = i
@@ -84,9 +84,9 @@ func transformRowMask(cols []msiColumn, r transformRow) (uint16, []int, error) {
 				continue
 			}
 			if i < len(r.changed) && r.changed[i] {
-				if i == 0 {
+				if i == 0 || i >= 16 {
 					// Bit 0 is the full-row discriminator: a non-key column 0
-					// cannot be expressed by the bitmask, so replace the row.
+					// or a column outside the 16-bit mask requires a full row.
 					return transformRowMask(cols, transformRow{op: transformInsert, cells: r.cells})
 				}
 				mask |= 1 << uint(i)
@@ -105,6 +105,9 @@ func transformRowMask(cols []msiColumn, r transformRow) (uint16, []int, error) {
 // encodeTransformTableStream serializes a table's delta rows into a transform
 // table stream. String cells must already be interned in pool.
 func encodeTransformTableStream(cols []msiColumn, rows []transformRow, pool *msiStringPool) ([]byte, error) {
+	if err := validateMSIColumnCount(len(cols)); err != nil {
+		return nil, fmt.Errorf("transform: %w", err)
+	}
 	longRefs := pool.isLongRefs()
 	var buf bytes.Buffer
 	for ri, r := range rows {
