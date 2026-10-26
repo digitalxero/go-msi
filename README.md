@@ -42,6 +42,20 @@ For MSIX/APPX packaging, see the companion module
 go get go.digitalxero.dev/go-msi
 ```
 
+### YAML configuration and CLI integration
+
+For building an MSI from a declarative configuration without writing Go, see
+the [nFPM MSI packager PR](https://github.com/goreleaser/nfpm/pull/1097).
+It uses go-msi behind nFPM's YAML configuration and CLI, covering package
+metadata, file/directory mapping, shortcuts, services, registry entries,
+signing, and major upgrades. The integration is currently proposed; check
+that PR for merge and release status before relying on an nFPM release.
+
+go-msi remains the Go library; the higher-level configuration and CLI belong
+in nFPM. The v0.x builder API may still evolve, so integrations should pin a
+tagged module version and review changes when updating it. See
+[#12](https://github.com/digitalxero/go-msi/issues/12) for the front-end discussion.
+
 ## Usage
 
 This builds an MSI that installs `app.exe` into `C:\Program Files\My App` and adds
