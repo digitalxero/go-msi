@@ -35,7 +35,8 @@ func main() {
 	for _, name := range []string{"compat.exe", "message.txt"} {
 		source, sourceErr := msi.FileSourceFromPath(filepath.Join(payload, name))
 		fail(sourceErr)
-		directory.Component(name).AssociateToFeature("Main").WithFile(name, source)
+		// This Go executable deliberately has no Windows version resource.
+		directory.Component(name).AssociateToFeature("Main").WithFile(name, source).WithVersion("")
 	}
 	b.Feature("Main").WithTitle("Compatibility").WithLevel(1)
 	pkg, err := b.Build()

@@ -92,6 +92,11 @@ func runICE03(ctx *iceContext) []Finding {
 				// Simple scan on target's first column (PK for our tables).
 				if catCol.keyTable != "" {
 					if s, ok := val.(string); ok && s != "" {
+						// File.Version is either a literal version or a companion
+						// file identifier. Only the latter is a foreign key.
+						if tblName == "File" && col.name() == "Version" && validateMSIVersionString(s) == nil {
+							continue
+						}
 						found := false
 						for _, kt := range strings.Split(catCol.keyTable, ";") {
 							for _, tr := range ctx.rowsOf(kt) {

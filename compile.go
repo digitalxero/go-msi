@@ -398,7 +398,14 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 				return nil, fmt.Errorf("msi compile: File %s name %q: %w", fid, f.name, err)
 			}
 
-			db.WithFileSource(cid, fid, fileNameColumn, f.src, f.version, seqByFile[fid])
+			version, language := f.version, ""
+			if !f.versionSet && version == "" {
+				version, language, err = sourcePEVersion(f.src)
+				if err != nil {
+					return nil, fmt.Errorf("msi compile: File %s (%s): %w", fid, f.name, err)
+				}
+			}
+			db.withFileMetadata(cid, fid, fileNameColumn, f.src, version, language, seqByFile[fid])
 		}
 	}
 
