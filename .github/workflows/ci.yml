@@ -21,6 +21,8 @@ jobs:
         shell: pwsh
         run: '"COMPATIBILITY_OUTPUT=$env:RUNNER_TEMP/msi-compatibility" | Out-File $env:GITHUB_ENV -Append -Encoding utf8'
       - name: Test PE versions against native Windows resources
+        env:
+          GO_MSI_WINDOWS_INSTALL_TEST: "1"
         run: go test -count=1 ./...
       - name: Install pinned Microsoft Installer SDK
         shell: pwsh
