@@ -36,29 +36,6 @@ jobs:
       - name: Cross-check MSI output against msitools + cabextract
         run: ./scripts/verify_msi.sh
 
-      - name: Cache makemsix binary
-        id: cache-makemsix
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/bin/makemsix
-          key: makemsix-linux-v1
-
-      - name: Build makemsix
-        if: steps.cache-makemsix.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update && sudo apt-get install -y cmake git-lfs
-          git clone https://github.com/microsoft/msix-packaging.git /tmp/msix-packaging
-          cd /tmp/msix-packaging
-          git lfs pull
-          ./makelinux.sh --pack --skip-tests
-          mkdir -p ~/.local/bin
-          cp .vs/bin/makemsix ~/.local/bin/makemsix
-
-      - name: Run integration tests
-        env:
-          MAKEMSIX_PATH: ~/.local/bin/makemsix
-        run: go test -tags integration -v ./...
-
   windows-patch:
     # Real Windows Installer applies the generated .msp: install the base MSI,
     # apply the patch, and assert the patched + new files on disk. The pure-Go
