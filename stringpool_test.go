@@ -7,6 +7,7 @@ package msi
 // These are internal tests (package msix) because the pool is unexported.
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -230,7 +231,7 @@ func TestMSIStringPool_LongRefsForcedByHeader(t *testing.T) {
 }
 
 func TestMSIStringPool_RefCountClamp(t *testing.T) {
-	// Refcounts above 0xFFFF are clamped, never wrapped (a wrap to 0 would
+	// Refcounts above 0x7FFF are clamped, never wrapped (a wrap to 0 would
 	// turn the entry into hole/big-string framing).
 	p := newMSIStringPool(0)
 	p.addString("x")
@@ -239,7 +240,47 @@ func TestMSIStringPool_RefCountClamp(t *testing.T) {
 	pool, err := p.poolBytes()
 	require.NoError(t, err)
 	require.Len(t, pool, 8)
-	assert.Equal(t, []byte{0x01, 0x00, 0xFF, 0xFF}, pool[4:8])
+	assert.Equal(t, []byte{0x01, 0x00, 0xFF, 0x7F}, pool[4:8])
+}
+
+func TestMSIStringPool_NativeSafeReferenceBoundaries(t *testing.T) {
+	for _, value := range []string{"short", strings.Repeat("B", 65536)} {
+		for _, count := range []int{32767, 32768, 65534, 65535, 65536, 70000} {
+			t.Run(fmt.Sprintf("length%d/refs%d", len(value), count), func(t *testing.T) {
+				p := newMSIStringPool(0)
+				for range count {
+					p.addString(value)
+				}
+				encoded, err := p.poolBytes()
+				require.NoError(t, err)
+				stored := binary.LittleEndian.Uint16(encoded[6:8])
+				assert.Equal(t, uint16(32767), stored)
+				assert.NotZero(t, stored&0x7fff, "native commit must not discard the string")
+				q, err := parseMSIStringPool(encoded, p.dataBytes())
+				require.NoError(t, err)
+				assert.Equal(t, value, q.getString(1))
+				assert.Equal(t, uint32(32767), q.refCount(1))
+			})
+		}
+	}
+}
+
+func TestMSIStringPool_NormalizesParsedLiveCounts(t *testing.T) {
+	for _, count := range []uint16{0, 32768, 65535} {
+		encoded := []byte{0, 0, 0, 0, 1, 0, 0, 0}
+		binary.LittleEndian.PutUint16(encoded[6:], count)
+		pool, err := parseMSIStringPool(encoded, []byte("x"))
+		require.NoError(t, err)
+		assert.Equal(t, uint32(count), pool.refCount(1), "reader accepts the original count")
+		assert.Equal(t, "x", pool.getString(1))
+		output, err := pool.poolBytes()
+		require.NoError(t, err)
+		want := uint16(32767)
+		if count == 0 {
+			want = 1
+		}
+		assert.Equal(t, want, binary.LittleEndian.Uint16(output[6:]))
+	}
 }
 
 func TestMSIStringPool_CodepageNeutralAndUTF8(t *testing.T) {

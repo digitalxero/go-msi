@@ -21,7 +21,7 @@ package msi
 // addString("") returns 0 and refFor("") is 0. Live strings always carry
 // refCount >= 1 (a 0-length/0-refcount slot is hole framing and a
 // 0-length/nonzero-refcount slot is the big-string marker); refcounts are
-// clamped to 0xFFFF on write rather than wrapped.
+// clamped to 0x7FFF on write rather than wrapped.
 //
 // Codepage: strings are stored as their raw Go UTF-8 bytes and byteLength is
 // measured on those bytes. Following Wine/msitools/WiX, a freshly created
@@ -54,10 +54,10 @@ const (
 	// maxShortStringLen is the largest byte length a normal 4-byte pool entry
 	// can describe; longer strings use the 8-byte big-string form.
 	maxShortStringLen = 0xFFFF
-	// maxMSIRefCount is the largest refcount a u16 pool field can hold;
-	// larger counts are clamped (never wrapped — a wrap to 0 would corrupt
-	// the hole/big-string framing).
-	maxMSIRefCount uint32 = 0xFFFF
+	// maxMSIRefCount keeps live counts within the native writer's 15-bit
+	// range. Larger values can become zero on a native commit, dropping
+	// referenced strings; saturating preserves a nonzero live entry.
+	maxMSIRefCount uint32 = 0x7FFF
 	// maxMSIPoolSlots is Wine's maxcount threshold: when the slot count
 	// including the reserved ID 0 exceeds it, long (3-byte) refs are used.
 	maxMSIPoolSlots = 0xFFFF
@@ -108,7 +108,9 @@ func (p *msiStringPool) addString(s string) uint32 {
 		return 0
 	}
 	if ref, ok := p.strToRef[s]; ok {
-		p.entries[ref].refCount++
+		if p.entries[ref].refCount < maxMSIRefCount {
+			p.entries[ref].refCount++
+		}
 		return ref
 	}
 	ref := uint32(len(p.entries))
@@ -179,6 +181,9 @@ func (p *msiStringPool) poolBytes() ([]byte, error) {
 			continue
 		}
 		refs := e.refCount
+		if refs == 0 {
+			refs = 1 // preserve a live parsed string on a native commit
+		}
 		if refs > maxMSIRefCount {
 			refs = maxMSIRefCount
 		}
@@ -188,9 +193,6 @@ func (p *msiStringPool) poolBytes() ([]byte, error) {
 			// msitools' saver emits a different (buggy) layout; do NOT copy it.
 			if uint64(len(e.data)) > uint64(^uint32(0)) {
 				return nil, fmt.Errorf("msix: string id %d is %d bytes, exceeding the u32 limit of the MSI string pool", i, len(e.data))
-			}
-			if refs == 0 {
-				refs = 1 // framing: length 0 + refcount 0 would read as a hole
 			}
 			binary.LittleEndian.PutUint16(slot[0:], 0)
 			binary.LittleEndian.PutUint16(slot[2:], uint16(refs))
