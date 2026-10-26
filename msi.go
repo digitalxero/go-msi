@@ -330,6 +330,8 @@ type FeatureBuilder interface {
 // added via ComponentBuilder.WithFile. Sequence and cabinet membership are
 // assigned by the compiler.
 type FileBuilder interface {
+	// WithVersion overrides automatic PE version-resource detection. An empty
+	// string explicitly permits an unversioned PE image (for example a Go binary).
 	WithVersion(version string) FileBuilder
 	// Vital(bool) and other flags can be added here when the File table
 	// population in the compiler is wired (P1 scope keeps them minimal).
@@ -479,9 +481,10 @@ type featEntry struct {
 }
 
 type attachedFile struct {
-	name    string
-	src     FileSource
-	version string
+	name       string
+	src        FileSource
+	version    string
+	versionSet bool
 }
 
 func (p *msiPackage) fail(err error) {
@@ -1081,6 +1084,7 @@ func (f *fileHandle) WithVersion(version string) FileBuilder {
 		for i := range c.files {
 			if c.files[i].name == f.name {
 				c.files[i].version = version
+				c.files[i].versionSet = true
 				break
 			}
 		}

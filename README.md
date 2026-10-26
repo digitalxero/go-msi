@@ -148,6 +148,32 @@ ICE validation runs by default on `Build()`/`WriteMSI()`; error-severity finding
 fail the build (`WithSkipValidation()` is the escape hatch). Use
 `msi.NewValidator().WithAllICEs().Build()` for explicit runs.
 
+### Executable file versions
+
+When writing an MSI, go-msi reads `VS_FIXEDFILEINFO` from PE32/PE32+ payloads
+and fills `File.Version` with the fixed **file** version, independently of the
+source filename extension. `File.Language` comes from the resource's
+`VarFileInfo/Translation` language IDs, or its resource language when no
+translation is supplied. This keeps versioned binaries versioned during upgrades.
+Ordinary data files remain unversioned.
+
+`FileBuilder.WithVersion("1.2.3.4")` explicitly overrides detection. A PE image
+with missing or malformed version metadata otherwise fails `WriteMSI` with a
+file-specific error. For intentionally unversioned binaries (including Go
+executables built without a version resource), opt in explicitly:
+
+```go
+c.WithFile("app.exe", app).WithVersion("")
+```
+
+Version inspection uses bounded reads. PE sources without random access are
+staged to a temporary disk file; the complete payload is never buffered in memory.
+The source must remain unchanged through `WriteMSI`, as for cabinet construction.
+
+See Microsoft's [File table](https://learn.microsoft.com/en-us/windows/win32/msi/file-table)
+and [VS_FIXEDFILEINFO](https://learn.microsoft.com/en-us/windows/win32/api/verrsrc/ns-verrsrc-vs_fixedfileinfo)
+documentation for the version and language fields.
+
 ### Shortcuts: target, "Start in", and icon
 
 For a normal executable target, use an MSI formatted path such as

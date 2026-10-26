@@ -20,6 +20,8 @@ jobs:
       - name: Set compatibility output directory
         shell: pwsh
         run: '"COMPATIBILITY_OUTPUT=$env:RUNNER_TEMP/msi-compatibility" | Out-File $env:GITHUB_ENV -Append -Encoding utf8'
+      - name: Test PE versions against native Windows resources
+        run: go test -count=1 ./...
       - name: Install pinned Microsoft Installer SDK
         shell: pwsh
         run: ./scripts/install_windows_sdk.ps1

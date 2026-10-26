@@ -27,6 +27,7 @@ type msiDatabaseBuilder interface {
 	WithDirectory(name, parentName, defaultDir string) msiDatabaseBuilder
 	WithComponent(name, guid, directory string, attributes int16, keyPath any) msiDatabaseBuilder
 	WithFileSource(component, fileID, fileName string, src FileSource, version string, sequence int16) msiDatabaseBuilder
+	withFileMetadata(component, fileID, fileName string, src FileSource, version, language string, sequence int16) msiDatabaseBuilder
 	WithFeature(name, title, description string, display, level int16) msiDatabaseBuilder
 	AssociateComponentToFeature(featureID, componentID string) msiDatabaseBuilder
 	WithSequenceAction(table, action string, condition any, sequence int16) msiDatabaseBuilder
@@ -135,12 +136,19 @@ func (d *msiDB) WithComponent(name, guid, directory string, attributes int16, ke
 }
 
 func (d *msiDB) WithFileSource(component, fileID, fileName string, src FileSource, version string, sequence int16) msiDatabaseBuilder {
+	return d.withFileMetadata(component, fileID, fileName, src, version, "", sequence)
+}
+
+func (d *msiDB) withFileMetadata(component, fileID, fileName string, src FileSource, version, language string, sequence int16) msiDatabaseBuilder {
 	t := d.table(msiFileTableName, createMSIFileTable)
-	var ver any
+	var ver, lang any
 	if version != "" {
 		ver = version
 	}
-	d.addRow(t, fileID, component, fileName, int32(src.Size()), ver, nil, nil, sequence)
+	if language != "" {
+		lang = language
+	}
+	d.addRow(t, fileID, component, fileName, int32(src.Size()), ver, lang, nil, sequence)
 	d.fileSources[fileID] = src
 	return d
 }
