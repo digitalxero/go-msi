@@ -265,6 +265,24 @@ func TestMSIStringPool_NativeSafeReferenceBoundaries(t *testing.T) {
 	}
 }
 
+func TestMSIStringPool_NormalizesParsedLiveCounts(t *testing.T) {
+	for _, count := range []uint16{0, 32768, 65535} {
+		encoded := []byte{0, 0, 0, 0, 1, 0, 0, 0}
+		binary.LittleEndian.PutUint16(encoded[6:], count)
+		pool, err := parseMSIStringPool(encoded, []byte("x"))
+		require.NoError(t, err)
+		assert.Equal(t, uint32(count), pool.refCount(1), "reader accepts the original count")
+		assert.Equal(t, "x", pool.getString(1))
+		output, err := pool.poolBytes()
+		require.NoError(t, err)
+		want := uint16(32767)
+		if count == 0 {
+			want = 1
+		}
+		assert.Equal(t, want, binary.LittleEndian.Uint16(output[6:]))
+	}
+}
+
 func TestMSIStringPool_CodepageNeutralAndUTF8(t *testing.T) {
 	// Declared 0 stays neutral while every string is pure ASCII.
 	p := newMSIStringPool(0)

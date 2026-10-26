@@ -181,6 +181,9 @@ func (p *msiStringPool) poolBytes() ([]byte, error) {
 			continue
 		}
 		refs := e.refCount
+		if refs == 0 {
+			refs = 1 // preserve a live parsed string on a native commit
+		}
 		if refs > maxMSIRefCount {
 			refs = maxMSIRefCount
 		}
@@ -190,9 +193,6 @@ func (p *msiStringPool) poolBytes() ([]byte, error) {
 			// msitools' saver emits a different (buggy) layout; do NOT copy it.
 			if uint64(len(e.data)) > uint64(^uint32(0)) {
 				return nil, fmt.Errorf("msix: string id %d is %d bytes, exceeding the u32 limit of the MSI string pool", i, len(e.data))
-			}
-			if refs == 0 {
-				refs = 1 // framing: length 0 + refcount 0 would read as a hole
 			}
 			binary.LittleEndian.PutUint16(slot[0:], 0)
 			binary.LittleEndian.PutUint16(slot[2:], uint16(refs))
