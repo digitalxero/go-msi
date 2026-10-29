@@ -2,6 +2,12 @@ param([Parameter(Mandatory)][string]$Fixture)
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $Fixture 'user-proof.log'
 Start-Transcript -Path $log -Force
+function Get-SHA256([string]$Path) {
+  $stream = [IO.File]::OpenRead($Path)
+  $hash = [Security.Cryptography.SHA256]::Create()
+  try { return [BitConverter]::ToString($hash.ComputeHash($stream)) }
+  finally { $hash.Dispose(); $stream.Dispose() }
+}
 try {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $principal = [Security.Principal.WindowsPrincipal]::new($identity)
@@ -17,6 +23,7 @@ try {
   $profile = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($identity.User.Value)").ProfileImagePath
   $profile = [Environment]::ExpandEnvironmentVariables($profile)
   if (-not (Test-Path $profile)) { throw 'Standard-user profile was not loaded' }
+  $env:PSModulePath = "$profile\Documents\WindowsPowerShell\Modules;" + [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine') + ";$PSHOME\Modules"
   $env:USERPROFILE = $profile
   $env:LOCALAPPDATA = Join-Path $profile 'AppData\Local'
   $env:APPDATA = Join-Path $profile 'AppData\Roaming'
@@ -40,7 +47,7 @@ try {
   if ($installer.ProductInfo($expected.code, 'ProductName') -cne $expected.product) { throw 'Installed Unicode product name changed' }
   if ($installer.ProductInfo($expected.code, 'Publisher') -cne $expected.manufacturer) { throw 'Installed Unicode manufacturer changed' }
   $executable = Join-Path $target 'app.exe'
-  if ((Get-FileHash $executable).Hash -ne (Get-FileHash (Join-Path $Fixture 'user.exe')).Hash) { throw 'Per-user executable differs' }
+  if ((Get-SHA256 $executable) -ne (Get-SHA256 (Join-Path $Fixture 'user.exe'))) { throw 'Per-user executable differs' }
   if ((& $executable).Trim() -ne 'OLDER') { throw 'Per-user executable did not run' }
   $marker = Join-Path $target 'ca.txt'
   if ((Get-Content $marker -Raw).Trim() -ne $identity.User.Value) { throw 'NoImpersonate action did not run as the standard user' }
