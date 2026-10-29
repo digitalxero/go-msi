@@ -3,6 +3,9 @@
 package msi_test
 
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -85,6 +88,18 @@ func diagnoseNativeSummary(t *testing.T, original, name string) {
 		rc, _, _ = persist.Call(uintptr(handle))
 		t.Logf("native persist cp %d rc %d", cp, rc)
 		close.Call(uintptr(handle))
+		nativePath, _ := syscall.UTF16PtrFromString(target)
+		var readHandle uint32
+		rc, _, _ = open.Call(0, uintptr(unsafe.Pointer(nativePath)), 0, uintptr(unsafe.Pointer(&readHandle)))
+		if rc == 0 {
+			var typ uint32
+			var val int32
+			buffer := make([]uint16, 1024)
+			length := uint32(len(buffer))
+			rc, _, _ = dll.NewProc("MsiSummaryInfoGetPropertyW").Call(uintptr(readHandle), 3, uintptr(unsafe.Pointer(&typ)), uintptr(unsafe.Pointer(&val)), 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&length)))
+			t.Logf("native API reread cp %d rc=%d type=%d length=%d subject=%q", cp, rc, typ, length, syscall.UTF16ToString(buffer))
+			close.Call(uintptr(readHandle))
+		}
 		f, err := os.Open(target)
 		require.NoError(t, err)
 		db, err := msi.Open(f)
@@ -100,6 +115,56 @@ func diagnoseNativeSummary(t *testing.T, original, name string) {
 		wire, err := io.ReadAll(stream.Open())
 		require.NoError(t, err)
 		t.Logf("native summary cp %d bytes: %x", cp, wire)
+		if cp == 1200 {
+			for _, variant := range []string{"unicode-variant", "utf8-codepage-last"} {
+				mutant := append([]byte(nil), data...)
+				source, err := os.Open(original)
+				require.NoError(t, err)
+				cfbReader, err := cfb.NewReader(source)
+				require.NoError(t, err)
+				summary, err := cfbReader.OpenStream("\x05SummaryInformation")
+				require.NoError(t, err)
+				ownWire, err := io.ReadAll(summary.Open())
+				require.NoError(t, err)
+				require.NoError(t, source.Close())
+				// The fixture's summary fits a single contiguous mini-stream extent.
+				offset := bytes.Index(mutant, ownWire)
+				require.GreaterOrEqual(t, offset, 0)
+				changed := append([]byte(nil), ownWire...)
+				section := changed[48:]
+				count := int(binary.LittleEndian.Uint32(section[4:]))
+				if variant == "unicode-variant" {
+					for i := 0; i < count; i++ {
+						off := int(binary.LittleEndian.Uint32(section[12+8*i:]))
+						if binary.LittleEndian.Uint32(section[off:]) == 30 {
+							binary.LittleEndian.PutUint32(section[off:], 31)
+							binary.LittleEndian.PutUint32(section[off+4:], binary.LittleEndian.Uint32(section[off+4:])/2)
+						}
+					}
+				} else {
+					// A pure ordering probe: retain UTF-16 and move PID 1 to the end.
+					first := append([]byte(nil), section[8:16]...)
+					copy(section[8:8+8*(count-1)], section[16:8+8*count])
+					copy(section[8+8*(count-1):], first)
+				}
+				copy(mutant[offset:], changed)
+				probe := filepath.Join(t.TempDir(), fmt.Sprint(variant)+".msi")
+				require.NoError(t, os.WriteFile(probe, mutant, 0600))
+				probePath, _ := syscall.UTF16PtrFromString(probe)
+				var probeHandle uint32
+				rc, _, _ = open.Call(0, uintptr(unsafe.Pointer(probePath)), 0, uintptr(unsafe.Pointer(&probeHandle)))
+				t.Logf("probe %s open rc=%d", variant, rc)
+				if rc == 0 {
+					var typ uint32
+					var val int32
+					buffer := make([]uint16, 1024)
+					length := uint32(len(buffer))
+					rc, _, _ = dll.NewProc("MsiSummaryInfoGetPropertyW").Call(uintptr(probeHandle), 3, uintptr(unsafe.Pointer(&typ)), uintptr(unsafe.Pointer(&val)), 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&length)))
+					t.Logf("probe %s rc=%d type=%d length=%d subject=%q", variant, rc, typ, length, syscall.UTF16ToString(buffer))
+					close.Call(uintptr(probeHandle))
+				}
+			}
+		}
 		require.NoError(t, f.Close())
 	}
 }
