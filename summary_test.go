@@ -473,7 +473,7 @@ func TestMSISummaryParseTolerance(t *testing.T) {
 }
 
 func TestSummaryCodepageStrings(t *testing.T) {
-	for _, cp := range []int{0, 1252, 1200, 65001} {
+	for _, cp := range []int{1252, 1200, 54936, 65001} {
 		t.Run(fmt.Sprint(cp), func(t *testing.T) {
 			info := summaryGoldenInfo()
 			info.Codepage = cp

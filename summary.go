@@ -82,7 +82,7 @@ var msiSummaryFmtID = [16]byte{
 // PageCount, WordCount) are always emitted, as is the Codepage, which must
 // precede any string property.
 type msiSummaryInfo struct {
-	Codepage       int       // PID 1; 0 selects 1252 for ASCII, 54936 otherwise
+	Codepage       int       // PID 1; 0 selects a lossless native Windows ANSI code page
 	Title          string    // PID 2; conventionally "Installation Database"
 	Subject        string    // PID 3; ProductName
 	Author         string    // PID 4; Manufacturer
@@ -163,19 +163,9 @@ func buildMSISummaryStream(info msiSummaryInfo) ([]byte, error) {
 // msiSummaryProps converts info into encoded properties in ascending PID order.
 func msiSummaryProps(info msiSummaryInfo) ([]msiSummaryProp, error) {
 	props := make([]msiSummaryProp, 0, 14)
-	codepage := info.Codepage
-	if codepage == 0 {
-		codepage = msiSummaryDefaultCodepage
-		for _, s := range []string{info.Title, info.Subject, info.Author, info.Keywords, info.Comments, info.Template, info.LastSavedBy, info.RevisionNumber, info.CreatingApp} {
-			for _, r := range s {
-				if r > 127 {
-					codepage = 54936
-				}
-			}
-		}
-	}
-	if codepage < 0 || codepage > math.MaxUint16 {
-		return nil, fmt.Errorf("summary codepage %d out of range", info.Codepage)
+	codepage, err := selectMSISummaryCodepage(info)
+	if err != nil {
+		return nil, err
 	}
 
 	addString := func(pid uint32, s string, required bool) error {
@@ -265,6 +255,44 @@ func msiSummaryProps(info msiSummaryInfo) ([]msiSummaryProp, error) {
 	}
 
 	return props, nil
+}
+
+// Native Windows Installer's summary getter does not support Unicode-only
+// code pages (including 1200, 65001 and 54936), even for its own persisted output.
+// Select a legacy ANSI code page only if every string has an exact round trip.
+// Never transliterate, drop a property, or substitute a replacement character.
+func selectMSISummaryCodepage(info msiSummaryInfo) (int, error) {
+	strings := []string{info.Title, info.Subject, info.Author, info.Keywords, info.Comments, info.Template, info.LastSavedBy, info.RevisionNumber, info.CreatingApp}
+	for _, s := range strings {
+		if err := validateMSISummaryString(s); err != nil {
+			return 0, err
+		}
+	}
+	if info.Codepage != 0 {
+		if info.Codepage < 0 || info.Codepage > math.MaxUint16 {
+			return 0, fmt.Errorf("summary codepage %d out of range", info.Codepage)
+		}
+		return info.Codepage, nil
+	}
+	for _, cp := range []int{1252, 1250, 1251, 1253, 1254, 1255, 1256, 1257, 1258, 874, 932, 936, 949, 950} {
+		fits := true
+		for _, s := range strings {
+			encoded, err := encodeSummaryString(s, cp)
+			if err != nil {
+				fits = false
+				break
+			}
+			decoded, err := decodeSummaryString(append([]byte(encoded), 0), cp)
+			if err != nil || decoded != s {
+				fits = false
+				break
+			}
+		}
+		if fits {
+			return cp, nil
+		}
+	}
+	return 0, errors.New("summary metadata cannot be represented losslessly in a native Windows Installer ANSI code page (supplementary Unicode is not supported)")
 }
 
 // validateMSISummaryString rejects malformed UTF-8 and embedded terminators.

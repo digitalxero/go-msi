@@ -359,14 +359,20 @@ This override is independent of builder call order. Per-machine packages retain
 their existing defaults (`ALLUSERS=1`, WordCount `2`).
 
 Pass original UTF-8 names to `WithProductName` and `WithManufacturer`, including
-accents, non-Latin text, and supplementary characters. Summary strings are
-encoded as OLE `VT_LPSTR` CodePageStrings in code page 54936 (GB18030) when non-ASCII text
-is present; ASCII-only summaries retain code page 1252. `Open(...).Summary()`
-returns the original strings. No transliteration, normalization, or identity
-seed change is performed. Summary decoding supports Windows-1252, UTF-8, and
-OLE CP_WINUNICODE (1200), plus common Windows legacy encodings (including
-932/936/949/950 and 1250–1258). Neutral or unrecognized code pages preserve their
-original bytes, keeping `Open` tolerant of existing MSI/MSP files.
+accents and non-Latin text. Authoring chooses a deterministic Windows ANSI code
+page that round trips **every** summary string exactly. ASCII-only summaries
+retain code page 1252. There is no transliteration, normalization, replacement,
+or identity seed change. If no supported ANSI code page preserves all names,
+`WriteMSI` returns an error before writing the package.
+
+Windows Installer's native summary reader returns empty strings for Unicode-only
+code pages (1200, 65001, and 54936), including summaries written by Windows itself.
+Consequently, supplementary characters cannot currently be authored in product
+or manufacturer names; they are rejected explicitly. Reader support is broader:
+`Open(...).Summary()` decodes Windows-1252, UTF-8, OLE CP_WINUNICODE (1200), GB18030,
+and common legacy Windows encodings (932/936/949/950 and 1250–1258). Neutral or
+unrecognized input code pages preserve their original bytes so `Open` remains
+tolerant of existing MSI/MSP files.
 
 Major-upgrade detection precedes launch conditions in both install sequences,
 including silent installs. `MajorUpgrade().AllowDowngrades()` continues to disable

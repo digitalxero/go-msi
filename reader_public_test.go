@@ -129,12 +129,12 @@ func TestPerUserSummaryDoesNotRequireElevation(t *testing.T) {
 }
 
 func TestUnicodeMetadataPersists(t *testing.T) {
-	for _, name := range []string{"Müller café", "日本語 Привет", "Tools 🚀"} {
+	for _, name := range []string{"Müller café", "日本語 Привет", "Müller 日本語"} {
 		t.Run(name, func(t *testing.T) {
 			db := openExamplePackage(t, readerTestPackage().WithProductName(name).WithManufacturer(name))
 			assert.Equal(t, name, db.Summary().Subject())
 			assert.Equal(t, name, db.Summary().Author())
-			assert.Equal(t, 54936, db.Summary().CodePage())
+			assert.Contains(t, []int{1252, 932, 936}, db.Summary().CodePage())
 			rows, err := db.Table("Property")
 			require.NoError(t, err)
 			for _, row := range rows {
@@ -153,4 +153,14 @@ func TestSummaryElevationOverride(t *testing.T) {
 		b = readerTestPackage().WithElevatedPrivileges(true).WithAllUsers(all)
 		assert.Equal(t, 2, openExamplePackage(t, b).Summary().WordCount())
 	}
+}
+
+func TestSupplementaryMetadataFailsWithoutChangingNames(t *testing.T) {
+	b := readerTestPackage().WithProductName("Tools 🚀")
+	pkg, err := b.Build()
+	require.NoError(t, err)
+	var out bytes.Buffer
+	err = pkg.WriteMSI(&out)
+	require.ErrorContains(t, err, "cannot be represented losslessly")
+	assert.Empty(t, out.Bytes(), "unrepresentable metadata must not produce a partial package")
 }

@@ -34,7 +34,7 @@ Sources: [Microsoft ICE](https://learn.microsoft.com/en-us/windows/win32/msi/usi
 
 
 The same required job runs `scripts/verify_regressions_windows.ps1`. It builds
-Unicode packages (accented, Japanese, Cyrillic, and supplementary metadata),
+Unicode packages (accented, Japanese, and Cyrillic metadata),
 checks summary values through Windows Installer COM, and runs the complete
 Darice ICE suite on each package. Native silent installation must reject a
 2.0.0 to default-policy 1.0.0 downgrade with error 1603, retain exactly one
@@ -49,6 +49,7 @@ checks the installed Unicode metadata, HKCU registry resource, executable bytes
 and execution, then removes the package and checks product/resource removal.
 A deferred `NoImpersonate` EXE custom action must report that standard user's
 SID, proving this package does not depend on system custom-action privileges.
-The proof logs and MSI fixtures are included in the compatibility artifact.
+Unrepresentable summary metadata, including supplementary characters, must fail
+without producing a partial package. The proof logs and MSI fixtures are included in the compatibility artifact.
 The reusable CI workflow also gates automatic main-branch tag/release creation,
 so the release job waits for these native checks.

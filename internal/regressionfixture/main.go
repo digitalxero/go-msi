@@ -31,7 +31,7 @@ func main() {
 		if kind == "newer" {
 			version, marker = "2.0.0", "NEWER"
 		}
-		product, manufacturer := "Müller 日本語 🚀", "Éditeur Привет 🚀"
+		product, manufacturer := "Müller 日本語", "Café Привет"
 		upgrade := "{3E1FF310-66B5-4FBA-9F27-25878EBD1C9F}"
 		if kind == "user" {
 			upgrade = "{BC013F83-2D6B-42F6-992A-9DE3D478165F}"
@@ -80,7 +80,7 @@ func main() {
 		if code != codes[kind] {
 			panic("persisted ProductCode differs")
 		}
-		manifest[kind] = map[string]any{"product": product, "manufacturer": manufacturer, "code": code, "upgrade": upgrade, "version": version, "wordCount": db.Summary().WordCount(), "payload": marker}
+		manifest[kind] = map[string]any{"product": product, "manufacturer": manufacturer, "code": code, "upgrade": upgrade, "version": version, "wordCount": db.Summary().WordCount(), "codepage": db.Summary().CodePage(), "payload": marker}
 		must(f.Close())
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
