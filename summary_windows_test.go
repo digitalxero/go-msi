@@ -68,7 +68,7 @@ func diagnoseNativeSummary(t *testing.T, original, name string) {
 	close := dll.NewProc("MsiCloseHandle")
 	data, err := os.ReadFile(original)
 	require.NoError(t, err)
-	for _, cp := range []uintptr{1252, 1200, 65001} {
+	for _, cp := range []uintptr{1252, 936, 1200, 54936, 65001} {
 		target := filepath.Join(t.TempDir(), "native.msi")
 		require.NoError(t, os.WriteFile(target, data, 0600))
 		path, err := syscall.UTF16PtrFromString(target)

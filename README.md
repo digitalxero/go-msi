@@ -360,7 +360,7 @@ their existing defaults (`ALLUSERS=1`, WordCount `2`).
 
 Pass original UTF-8 names to `WithProductName` and `WithManufacturer`, including
 accents, non-Latin text, and supplementary characters. Summary strings are
-encoded as OLE `VT_LPSTR` CodePageStrings in code page 1200 (UTF-16LE) when non-ASCII text
+encoded as OLE `VT_LPSTR` CodePageStrings in code page 54936 (GB18030) when non-ASCII text
 is present; ASCII-only summaries retain code page 1252. `Open(...).Summary()`
 returns the original strings. No transliteration, normalization, or identity
 seed change is performed. Summary decoding supports Windows-1252, UTF-8, and

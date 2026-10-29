@@ -134,7 +134,7 @@ func TestUnicodeMetadataPersists(t *testing.T) {
 			db := openExamplePackage(t, readerTestPackage().WithProductName(name).WithManufacturer(name))
 			assert.Equal(t, name, db.Summary().Subject())
 			assert.Equal(t, name, db.Summary().Author())
-			assert.Equal(t, 1200, db.Summary().CodePage())
+			assert.Equal(t, 54936, db.Summary().CodePage())
 			rows, err := db.Table("Property")
 			require.NoError(t, err)
 			for _, row := range rows {
