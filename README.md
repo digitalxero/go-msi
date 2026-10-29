@@ -345,6 +345,9 @@ Generated output is verified at several layers, all green in CI:
 into locations writable by the installing user, such as an `INSTALLFOLDER`
 resolved under LocalAppData, and use HKCU for registry resources. This flag does
 not grant permission to install services, write HKLM, or write Program Files.
+When using a runtime `INSTALLFOLDER` override with a registry component KeyPath,
+persist and restore that location for maintenance, or pass the same override to
+uninstall. The directory override is not automatically saved by this library.
 Deferred custom actions, including `NoImpersonate()` actions, run with user
 privileges in a non-elevating package; they must support that context.
 

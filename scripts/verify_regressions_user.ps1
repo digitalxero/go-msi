@@ -52,7 +52,9 @@ try {
   $marker = Join-Path $target 'ca.txt'
   if ((Get-Content $marker -Raw).Trim() -ne $identity.User.Value) { throw 'NoImpersonate action did not run as the standard user' }
   if ((Get-ItemProperty 'HKCU:\Software\GoMSIRegression').Installed -ne '1') { throw 'HKCU resource was not installed' }
-  $process = Start-Process msiexec.exe -ArgumentList "/x `"$package`" /qn /norestart /L*V `"$removeLog`"" -Wait -PassThru
+  # This fixture uses a runtime INSTALLFOLDER override and a registry KeyPath;
+  # maintenance must receive that same override instead of the TARGETDIR default.
+  $process = Start-Process msiexec.exe -ArgumentList "/x `"$package`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$removeLog`"" -Wait -PassThru
   if ($process.ExitCode -ne 0) { throw "Standard-user removal failed: $($process.ExitCode)" }
   if (@($installer.RelatedProducts($expected.upgrade)).Count -ne 0) { throw 'Per-user product remains registered' }
   if (Test-Path $executable) { throw 'Per-user executable remains after removal' }

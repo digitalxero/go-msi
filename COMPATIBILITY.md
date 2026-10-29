@@ -46,6 +46,8 @@ checks that it is neither elevated nor an Administrators member, UAC is enabled,
 and AlwaysInstallElevated is absent. It installs into that user's LocalAppData,
 checks the installed Unicode metadata, HKCU registry resource, executable bytes
 and execution, then removes the package and checks product/resource removal.
+The fixture supplies the same explicit `INSTALLFOLDER` during install and remove:
+its registry component KeyPath does not persist the directory override.
 A deferred `NoImpersonate` EXE custom action must report that standard user's
 SID, proving this package does not depend on system custom-action privileges.
 Unrepresentable summary metadata, including supplementary characters, must fail
