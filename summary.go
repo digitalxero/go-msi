@@ -274,6 +274,15 @@ func selectMSISummaryCodepage(info msiSummaryInfo) (int, error) {
 		}
 		return info.Codepage, nil
 	}
+	for _, s := range strings {
+		for _, r := range s {
+			// x/text Big5 includes HKSCS supplementary mappings absent from Windows
+			// CP950. Do not mistake a Go-only round trip for native representability.
+			if r > 0xFFFF {
+				return 0, errors.New("summary metadata cannot be represented losslessly in a native Windows Installer ANSI code page (supplementary Unicode is not supported)")
+			}
+		}
+	}
 	for _, cp := range []int{1252, 1250, 1251, 1253, 1254, 1255, 1256, 1257, 1258, 874, 932, 936, 949, 950} {
 		fits := true
 		for _, s := range strings {
@@ -458,7 +467,6 @@ func decodeMSISummaryValue(section []byte, off uint32, codepage int) (any, error
 		}
 		s := body[4 : 4+cb]
 		return decodeSummaryString(s, codepage)
-
 	default:
 		return nil, nil
 	}

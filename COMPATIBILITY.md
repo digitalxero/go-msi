@@ -32,7 +32,6 @@ Sources: [Microsoft ICE](https://learn.microsoft.com/en-us/windows/win32/msi/usi
 [Windows Installer command line](https://learn.microsoft.com/en-us/windows/win32/msi/command-line-options),
 [Windows SDK downloads](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/).
 
-
 The same required job runs `scripts/verify_regressions_windows.ps1`. It builds
 Unicode packages (accented, Japanese, and Cyrillic metadata),
 checks summary values through Windows Installer COM, and runs the complete
@@ -50,10 +49,10 @@ and execution, then removes the package and checks product/resource removal.
 A deferred `NoImpersonate` EXE custom action must report that standard user's
 SID, proving this package does not depend on system custom-action privileges.
 Unrepresentable summary metadata, including supplementary characters, must fail
-without producing a partial package. The proof logs and MSI fixtures are included in the compatibility artifact.
+without producing a partial package. The proof logs and MSI fixtures are included
+in the compatibility artifact.
 The reusable CI workflow also gates automatic main-branch tag/release creation,
 so the release job waits for these native checks.
-
 
 Windows Server blocks unmanaged non-elevated MSI installs by default. On the
 non-domain-joined disposable GitHub runner, the proof temporarily sets

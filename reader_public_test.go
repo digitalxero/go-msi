@@ -156,11 +156,15 @@ func TestSummaryElevationOverride(t *testing.T) {
 }
 
 func TestSupplementaryMetadataFailsWithoutChangingNames(t *testing.T) {
-	b := readerTestPackage().WithProductName("Tools 🚀")
-	pkg, err := b.Build()
-	require.NoError(t, err)
-	var out bytes.Buffer
-	err = pkg.WriteMSI(&out)
-	require.ErrorContains(t, err, "cannot be represented losslessly")
-	assert.Empty(t, out.Bytes(), "unrepresentable metadata must not produce a partial package")
+	for _, name := range []string{"Tools 🚀", "Tools \U00020087"} {
+		t.Run(name, func(t *testing.T) {
+			b := readerTestPackage().WithProductName(name)
+			pkg, err := b.Build()
+			require.NoError(t, err)
+			var out bytes.Buffer
+			err = pkg.WriteMSI(&out)
+			require.ErrorContains(t, err, "cannot be represented losslessly")
+			assert.Empty(t, out.Bytes(), "unrepresentable metadata must not produce a partial package")
+		})
+	}
 }

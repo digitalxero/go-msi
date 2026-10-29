@@ -338,11 +338,7 @@ Generated output is verified at several layers, all green in CI:
 
 - Go 1.25 or later.
 
-## License
-
-See [LICENSE](LICENSE) for details.
-
-### Per-user privileges and Unicode metadata
+## Per-user privileges and Unicode metadata
 
 `WithAllUsers(false)` omits `ALLUSERS` and marks the package as non-elevating
 (Summary WordCount `2 | 8`, minimum Windows Installer 4.0). Install resources
@@ -391,3 +387,7 @@ Sources: [non-elevating packages](https://learn.microsoft.com/en-us/windows/win3
 [Summary code page](https://learn.microsoft.com/en-us/windows/win32/msi/codepage-summary),
 [OLE CodePageString](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-oleps/a4c32611-5b79-4965-8f50-50639c138e16),
 [Windows code pages](https://learn.microsoft.com/en-us/windows/win32/intl/code-page-identifiers).
+
+## License
+
+See [LICENSE](LICENSE) for details.

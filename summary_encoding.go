@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"golang.org/x/text/encoding"
-	"golang.org/x/text/encoding/ianaindex"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/ianaindex"
 )
 
 // Windows-1252 differs from Latin-1 only in this range. Undefined byte values
