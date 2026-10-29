@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/ianaindex"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -45,6 +47,9 @@ func encodeSummaryString(s string, cp int) (string, error) {
 		}
 		return string(b), nil
 	default:
+		if e := legacySummaryEncoding(cp); e != nil {
+			return e.NewEncoder().String(s)
+		}
 		return "", fmt.Errorf("unsupported summary codepage %d", cp)
 	}
 }
@@ -94,6 +99,56 @@ func decodeSummaryString(b []byte, cp int) (string, error) {
 		}
 		return string(out), nil
 	default:
-		return "", fmt.Errorf("unsupported summary codepage %d", cp)
+		if n := bytes.IndexByte(b, 0); n >= 0 {
+			b = b[:n]
+		}
+		if e := legacySummaryEncoding(cp); e != nil {
+			return e.NewDecoder().String(string(b))
+		}
+		// Preserve Open's historical tolerance for neutral and unknown code pages.
+		// Without an encoding definition the original bytes are the only lossless
+		// representation; do not guess a locale or reject the whole MSI/MSP.
+		return string(b), nil
 	}
+}
+
+func legacySummaryEncoding(cp int) encoding.Encoding {
+	var name string
+	switch {
+	case cp >= 1250 && cp <= 1258:
+		name = fmt.Sprintf("windows-%d", cp)
+	case cp >= 28591 && cp <= 28606:
+		name = fmt.Sprintf("iso-8859-%d", cp-28590)
+	default:
+		switch cp {
+		case 874:
+			name = "windows-874"
+		case 932:
+			name = "shift_jis"
+		case 936:
+			name = "gbk"
+		case 949:
+			name = "euc-kr"
+		case 950:
+			name = "big5"
+		case 54936:
+			name = "gb18030"
+		case 10000:
+			name = "macintosh"
+		case 437, 850, 852, 855, 858, 860, 862, 863, 865, 866:
+			name = fmt.Sprintf("IBM%d", cp)
+		case 20866:
+			name = "koi8-r"
+		case 21866:
+			name = "koi8-u"
+		}
+	}
+	if name == "" {
+		return nil
+	}
+	e, err := ianaindex.MIME.Encoding(name)
+	if err != nil {
+		return nil
+	}
+	return e
 }

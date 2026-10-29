@@ -364,7 +364,9 @@ encoded as OLE `VT_LPSTR` CodePageStrings in code page 1200 (UTF-16LE) when non-
 is present; ASCII-only summaries retain code page 1252. `Open(...).Summary()`
 returns the original strings. No transliteration, normalization, or identity
 seed change is performed. Summary decoding supports Windows-1252, UTF-8, and
-OLE CP_WINUNICODE (1200); unsupported code pages return an error.
+OLE CP_WINUNICODE (1200), plus common Windows legacy encodings (including
+932/936/949/950 and 1250–1258). Neutral or unrecognized code pages preserve their
+original bytes, keeping `Open` tolerant of existing MSI/MSP files.
 
 Major-upgrade detection precedes launch conditions in both install sequences,
 including silent installs. `MajorUpgrade().AllowDowngrades()` continues to disable
