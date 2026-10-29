@@ -41,6 +41,7 @@ func TestNativeUnicodeSummary(t *testing.T) {
 				length := uint32(len(buffer))
 				rc, _, _ := getProperty.Call(uintptr(handle), property, uintptr(unsafe.Pointer(&dataType)), uintptr(unsafe.Pointer(&integer)), 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&length)))
 				require.Zero(t, rc, "MsiSummaryInfoGetPropertyW PID %d", property)
+				assert.Equal(t, uint32(30), dataType, "PID %d variant type", property)
 				actual := syscall.UTF16ToString(buffer)
 				assert.Equal(t, name, actual, "PID %d codepoints: %U", property, []rune(actual))
 			}

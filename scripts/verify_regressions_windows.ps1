@@ -26,7 +26,7 @@ try {
   foreach ($kind in @('newer', 'blocked', 'allowed', 'user')) {
     $package = Join-Path $fixture "$kind.msi"
     $summary = $installer.SummaryInformation($package, 0)
-    if (([int]$summary.Property(1) -band 0xffff) -ne 65001) { throw "$kind summary codepage differs" }
+    if (([int]$summary.Property(1) -band 0xffff) -ne 1200) { throw "$kind summary codepage differs" }
     if ($summary.Property(3) -cne $manifest.$kind.product) { throw "$kind Unicode Subject changed: expected [$($manifest.$kind.product)], got [$($summary.Property(3))]" }
     if ($summary.Property(4) -cne $manifest.$kind.manufacturer) { throw "$kind Unicode Author changed: expected [$($manifest.$kind.manufacturer)], got [$($summary.Property(4))]" }
     $wordCount = if ($kind -eq 'user') { 10 } else { 2 }

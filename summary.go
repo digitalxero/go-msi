@@ -82,7 +82,7 @@ var msiSummaryFmtID = [16]byte{
 // PageCount, WordCount) are always emitted, as is the Codepage, which must
 // precede any string property.
 type msiSummaryInfo struct {
-	Codepage       int       // PID 1; 0 selects 1252 for ASCII, 65001 otherwise
+	Codepage       int       // PID 1; 0 selects 1252 for ASCII, 1200 otherwise
 	Title          string    // PID 2; conventionally "Installation Database"
 	Subject        string    // PID 3; ProductName
 	Author         string    // PID 4; Manufacturer
@@ -169,7 +169,7 @@ func msiSummaryProps(info msiSummaryInfo) ([]msiSummaryProp, error) {
 		for _, s := range []string{info.Title, info.Subject, info.Author, info.Keywords, info.Comments, info.Template, info.LastSavedBy, info.RevisionNumber, info.CreatingApp} {
 			for _, r := range s {
 				if r > 127 {
-					codepage = int(utf8MSICodepage)
+					codepage = 1200
 				}
 			}
 		}
