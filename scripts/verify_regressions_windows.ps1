@@ -4,6 +4,12 @@ New-Item -ItemType Directory -Force $fixture | Out-Null
 Start-Transcript -Path (Join-Path $fixture 'native-proof.log') -Force
 $userName = 'msitest' + [guid]::NewGuid().ToString('N').Substring(0, 10)
 $createdUser = $false
+$policyChanged = $false
+$policyPath = 'HKLM:\Software\Policies\Microsoft\Windows\Installer'
+$policyKeyCreated = $false
+$hadDisableMSI = $false
+$oldDisableMSI = $null
+$oldDisableMSIKind = $null
 $installer = New-Object -ComObject WindowsInstaller.Installer
 function Run-MSI([string]$Arguments) {
   $process = Start-Process msiexec.exe -ArgumentList $Arguments -Wait -PassThru
@@ -59,6 +65,23 @@ try {
   if (Test-Path (Join-Path $target 'app.exe')) { throw 'Machine executable remains' }
   Write-Host 'EXPLICIT_DOWNGRADE_AND_UNICODE_INSTALL_REMOVE_OK'
 
+  # Windows Server defaults block unmanaged, non-elevated MSI installs.
+  # Configure this disposable hosted runner to allow ordinary per-user installs;
+  # this does not enable elevation or grant the test account extra rights.
+  if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') { throw 'Standard-account provisioning requires a disposable GitHub Windows runner' }
+  if ((Get-CimInstance Win32_ComputerSystem).PartOfDomain) { throw 'Do not override domain-managed installer policy' }
+  $policyKeyCreated = -not (Test-Path $policyPath)
+  if ($policyKeyCreated) { New-Item $policyPath -Force | Out-Null }
+  $policyKey = Get-Item $policyPath
+  $hadDisableMSI = $policyKey.GetValueNames() -contains 'DisableMSI'
+  if ($hadDisableMSI) {
+    $oldDisableMSI = $policyKey.GetValue('DisableMSI')
+    $oldDisableMSIKind = $policyKey.GetValueKind('DisableMSI')
+  }
+  Write-Host "Disposable runner DisableMSI: previous=$oldDisableMSI present=$hadDisableMSI; test value=0"
+  New-ItemProperty $policyPath -Name DisableMSI -PropertyType DWord -Value 0 -Force | Out-Null
+  $policyChanged = $true
+
   # A fresh local account has neither an administrator token nor membership.
   # Test files live outside runner-private TEMP, and this account can only
   # modify this disposable proof directory. No runas/elevation verb is used.
@@ -77,10 +100,25 @@ try {
   $powershell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
   $process = Start-Process $powershell -Credential $credential -LoadUserProfile -WorkingDirectory $userFixture -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$userFixture\verify_regressions_user.ps1`" -Fixture `"$userFixture`"" -Wait -PassThru
   Copy-Item "$userFixture\*.log" $fixture -ErrorAction Continue
-  if ($process.ExitCode -ne 0) { throw "Non-admin proof process failed: $($process.ExitCode)" }
+  if ($process.ExitCode -ne 0) {
+    Get-Content "$fixture\user-proof.log" -Tail 30 -ErrorAction Continue | Write-Host
+    throw "Non-admin proof process failed: $($process.ExitCode)"
+  }
   if ((Get-Content "$fixture\user-proof.log" -Raw) -notmatch 'STANDARD_USER_INSTALL_REMOVE_OK') { throw 'Non-admin success receipt missing' }
   Write-Host 'GO_MSI_UPSTREAM_REGRESSIONS_OK'
 } finally {
   if ($createdUser) { Remove-LocalUser -Name $userName }
+  if ($policyChanged) {
+    if ($hadDisableMSI) {
+      New-ItemProperty $policyPath -Name DisableMSI -PropertyType $oldDisableMSIKind -Value $oldDisableMSI -Force | Out-Null
+    } else {
+      Remove-ItemProperty $policyPath -Name DisableMSI
+    }
+    if ($policyKeyCreated) {
+      $restored = Get-Item $policyPath
+      if ($restored.GetValueNames().Count -eq 0 -and $restored.GetSubKeyNames().Count -eq 0) { Remove-Item $policyPath }
+    }
+    Write-Host 'Original DisableMSI policy restored'
+  }
   Stop-Transcript
 }

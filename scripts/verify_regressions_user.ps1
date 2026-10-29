@@ -12,6 +12,18 @@ try {
     $policy = Get-ItemProperty "$root\Software\Policies\Microsoft\Windows\Installer" -ErrorAction SilentlyContinue
     if ($policy.AlwaysInstallElevated -eq 1) { throw 'AlwaysInstallElevated would invalidate proof' }
   }
+  # CreateProcessWithLogonW preserves the parent's environment. Resolve the
+  # freshly loaded profile by this token's SID instead of inheriting runneradmin.
+  $profile = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($identity.User.Value)").ProfileImagePath
+  $profile = [Environment]::ExpandEnvironmentVariables($profile)
+  if (-not (Test-Path $profile)) { throw 'Standard-user profile was not loaded' }
+  $env:USERPROFILE = $profile
+  $env:LOCALAPPDATA = Join-Path $profile 'AppData\Local'
+  $env:APPDATA = Join-Path $profile 'AppData\Roaming'
+  $env:TEMP = Join-Path $env:LOCALAPPDATA 'Temp'
+  $env:TMP = $env:TEMP
+  if ((Get-ItemProperty 'HKLM:\Software\Policies\Microsoft\Windows\Installer').DisableMSI -ne 0) { throw 'Disposable runner must allow ordinary per-user MSI installation' }
+  Write-Host "STANDARD_USER_TOKEN sid=$($identity.User.Value) profile=$profile elevated=False administratorMember=False"
   $manifest = Get-Content (Join-Path $Fixture 'manifest.json') -Encoding UTF8 -Raw | ConvertFrom-Json
   $expected = $manifest.user
   $installer = New-Object -ComObject WindowsInstaller.Installer
@@ -39,6 +51,9 @@ try {
   if (Test-Path $executable) { throw 'Per-user executable remains after removal' }
   if (Get-ItemProperty 'HKCU:\Software\GoMSIRegression' -Name Installed -ErrorAction SilentlyContinue) { throw 'HKCU resource remains' }
   Write-Host "STANDARD_USER_INSTALL_REMOVE_OK sid=$($identity.User.Value) NoImpersonateSid=$(Get-Content $marker -Raw)"
+} catch {
+  Write-Host ($_ | Out-String)
+  throw
 } finally {
   Stop-Transcript
 }

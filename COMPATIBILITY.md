@@ -53,3 +53,13 @@ Unrepresentable summary metadata, including supplementary characters, must fail
 without producing a partial package. The proof logs and MSI fixtures are included in the compatibility artifact.
 The reusable CI workflow also gates automatic main-branch tag/release creation,
 so the release job waits for these native checks.
+
+
+Windows Server blocks unmanaged non-elevated MSI installs by default. On the
+non-domain-joined disposable GitHub runner, the proof temporarily sets
+`DisableMSI=0` to allow ordinary per-user installation and restores the exact
+previous value (or absence) in `finally`. UAC remains enabled and
+AlwaysInstallElevated remains disabled. The child resolves its actual loaded
+profile from its token SID, avoiding the administrator's inherited environment.
+This setup does not grant elevation or administrator membership to that user.
+See [Microsoft DisableMSI policy](https://learn.microsoft.com/en-us/windows/win32/msi/disablemsi).
