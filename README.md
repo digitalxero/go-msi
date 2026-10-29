@@ -338,6 +338,59 @@ Generated output is verified at several layers, all green in CI:
 
 - Go 1.25 or later.
 
+## Per-user privileges and Unicode metadata
+
+`WithAllUsers(false)` omits `ALLUSERS` and marks the package as non-elevating
+(Summary WordCount `2 | 8`, minimum Windows Installer 4.0). Install resources
+into locations writable by the installing user, such as an `INSTALLFOLDER`
+resolved under LocalAppData, and use HKCU for registry resources. This flag does
+not grant permission to install services, write HKLM, or write Program Files.
+When using a runtime `INSTALLFOLDER` override with a registry component KeyPath,
+persist and restore that location for maintenance, or pass the same override to
+uninstall. The directory override is not automatically saved by this library.
+Deferred custom actions, including `NoImpersonate()` actions, run with user
+privileges in a non-elevating package; they must support that context.
+
+`WithElevatedPrivileges(true)` explicitly restores the previous privilege
+requirement for a per-user package that needs elevation. Conversely,
+`WithElevatedPrivileges(false)` explicitly marks a package as non-elevating.
+This override is independent of builder call order. Per-machine packages retain
+their existing defaults (`ALLUSERS=1`, WordCount `2`).
+
+Pass original UTF-8 names to `WithProductName` and `WithManufacturer`, including
+accents and non-Latin text. Authoring chooses a deterministic Windows ANSI code
+page that round trips **every** summary string exactly. ASCII-only summaries
+retain code page 1252. There is no transliteration, normalization, replacement,
+or identity seed change. If no supported ANSI code page preserves all names,
+`WriteMSI` returns an error before writing the package.
+
+Windows Installer's native summary reader returns empty strings for Unicode-only
+code pages (1200, 65001, and 54936), including summaries written by Windows itself.
+Consequently, supplementary characters cannot currently be authored in product
+or manufacturer names; they are rejected explicitly. Reader support is broader:
+`Open(...).Summary()` decodes Windows-1252, UTF-8, OLE CP_WINUNICODE (1200), GB18030,
+and common legacy Windows encodings (932/936/949/950 and 1250–1258). Neutral or
+unrecognized input code pages preserve their original bytes so `Open` remains
+tolerant of existing MSI/MSP files.
+
+Major-upgrade detection precedes launch conditions in both install sequences,
+including silent installs. `MajorUpgrade().AllowDowngrades()` continues to disable
+the downgrade block; author a separate open-ended `Upgrade` removal rule when
+the newer product should also be removed:
+
+```go
+builder.MajorUpgrade().AllowDowngrades()
+builder.Upgrade(upgradeCode).
+    DetectRange(version, "").
+    ActionProperty("REMOVE_NEWER")
+```
+
+Sources: [non-elevating packages](https://learn.microsoft.com/en-us/windows/win32/msi/authoring-packages-without-the-uac-dialog-box),
+[WordCount flags](https://learn.microsoft.com/en-us/windows/win32/msi/word-count-summary),
+[Summary code page](https://learn.microsoft.com/en-us/windows/win32/msi/codepage-summary),
+[OLE CodePageString](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-oleps/a4c32611-5b79-4965-8f50-50639c138e16),
+[Windows code pages](https://learn.microsoft.com/en-us/windows/win32/intl/code-page-identifiers).
+
 ## License
 
 See [LICENSE](LICENSE) for details.

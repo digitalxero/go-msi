@@ -453,13 +453,13 @@ func TestCompileP4_MajorUpgradeActionsScheduled(t *testing.T) {
 	require.NoError(t, err)
 
 	ies := "InstallExecuteSequence"
-	assert.Equal(t, int16(200), seqActionSeq(t, readDB, ies, "FindRelatedProducts"))
+	assert.Equal(t, int16(25), seqActionSeq(t, readDB, ies, "FindRelatedProducts"))
 	assert.Equal(t, int16(1200), seqActionSeq(t, readDB, ies, "MigrateFeatureStates"))
 	assert.Equal(t, int16(1450), seqActionSeq(t, readDB, ies, "RemoveExistingProducts"), "RemoveAfter(InstallValidate) -> 1450")
 
 	// In the UI sequence FindRelatedProducts is present, services are not.
 	ius := "InstallUISequence"
-	assert.Equal(t, int16(200), seqActionSeq(t, readDB, ius, "FindRelatedProducts"))
+	assert.Equal(t, int16(25), seqActionSeq(t, readDB, ius, "FindRelatedProducts"))
 	assert.Equal(t, int16(-1), seqActionSeq(t, readDB, ius, "InstallServices"), "services are IES-only")
 }
 

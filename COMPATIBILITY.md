@@ -31,3 +31,36 @@ Sources: [Microsoft ICE](https://learn.microsoft.com/en-us/windows/win32/msi/usi
 [COM validation engine](https://learn.microsoft.com/en-us/windows/win32/msi/validation-automation),
 [Windows Installer command line](https://learn.microsoft.com/en-us/windows/win32/msi/command-line-options),
 [Windows SDK downloads](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/).
+
+The same required job runs `scripts/verify_regressions_windows.ps1`. It builds
+Unicode packages (accented, Japanese, and Cyrillic metadata),
+checks summary values through Windows Installer COM, and runs the complete
+Darice ICE suite on each package. Native silent installation must reject a
+2.0.0 to default-policy 1.0.0 downgrade with error 1603, retain exactly one
+related product, and preserve both the hash and `NEWER` output of its executable.
+An explicit downgrade with a newer-product removal rule must then install
+`OLDER`, leave exactly one product, and uninstall cleanly.
+
+The per-user proof creates a temporary local standard account. The child process
+checks that it is neither elevated nor an Administrators member, UAC is enabled,
+and AlwaysInstallElevated is absent. It installs into that user's LocalAppData,
+checks the installed Unicode metadata, HKCU registry resource, executable bytes
+and execution, then removes the package and checks product/resource removal.
+The fixture supplies the same explicit `INSTALLFOLDER` during install and remove:
+its registry component KeyPath does not persist the directory override.
+A deferred `NoImpersonate` EXE custom action must report that standard user's
+SID, proving this package does not depend on system custom-action privileges.
+Unrepresentable summary metadata, including supplementary characters, must fail
+without producing a partial package. The proof logs and MSI fixtures are included
+in the compatibility artifact.
+The reusable CI workflow also gates automatic main-branch tag/release creation,
+so the release job waits for these native checks.
+
+Windows Server blocks unmanaged non-elevated MSI installs by default. On the
+non-domain-joined disposable GitHub runner, the proof temporarily sets
+`DisableMSI=0` to allow ordinary per-user installation and restores the exact
+previous value (or absence) in `finally`. UAC remains enabled and
+AlwaysInstallElevated remains disabled. The child resolves its actual loaded
+profile from its token SID, avoiding the administrator's inherited environment.
+This setup does not grant elevation or administrator membership to that user.
+See [Microsoft DisableMSI policy](https://learn.microsoft.com/en-us/windows/win32/msi/disablemsi).

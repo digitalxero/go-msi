@@ -5,6 +5,7 @@ package msi
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -327,9 +328,9 @@ func TestMSISummaryFiletimeEncoding(t *testing.T) {
 func TestMSISummaryBuildErrors(t *testing.T) {
 	valid := summaryGoldenInfo()
 
-	t.Run("non-ASCII string", func(t *testing.T) {
+	t.Run("unrepresentable in explicit codepage", func(t *testing.T) {
 		info := valid
-		info.Author = "Müller GmbH"
+		info.Author = "日本語"
 		_, err := buildMSISummaryStream(info)
 		assert.Error(t, err)
 	})
@@ -469,4 +470,71 @@ func TestMSISummaryParseTolerance(t *testing.T) {
 		assert.Zero(t, parsed.PageCount, "mismatched type must not populate PageCount")
 		assert.Equal(t, 2, parsed.WordCount, "later properties still parsed")
 	})
+}
+
+func TestSummaryCodepageStrings(t *testing.T) {
+	for _, cp := range []int{1252, 1200, 54936, 65001} {
+		t.Run(fmt.Sprint(cp), func(t *testing.T) {
+			info := summaryGoldenInfo()
+			info.Codepage = cp
+			info.Subject = "Müller € café"
+			if cp != 1252 {
+				info.Subject += " 日本語 🚀"
+			}
+			data, err := buildMSISummaryStream(info)
+			require.NoError(t, err)
+			got, err := parseMSISummaryStream(data)
+			require.NoError(t, err)
+			assert.Equal(t, info.Subject, got.Subject)
+			// Property table order is not semantic: read PID 1 before decoding strings.
+			section := data[48:]
+			count := int(binary.LittleEndian.Uint32(section[4:]))
+			last := 8 + 8*(count-1)
+			firstEntry := append([]byte(nil), section[8:16]...)
+			copy(section[8:16], section[last:last+8])
+			copy(section[last:last+8], firstEntry)
+			got, err = parseMSISummaryStream(data)
+			require.NoError(t, err)
+			assert.Equal(t, info.Subject, got.Subject)
+		})
+	}
+}
+
+func TestSummaryStringEncodingErrors(t *testing.T) {
+	for _, text := range []string{"bad\x00title", "bad\xff"} {
+		info := summaryGoldenInfo()
+		info.Codepage, info.Subject = 65001, text
+		_, err := buildMSISummaryStream(info)
+		require.Error(t, err)
+	}
+}
+
+func TestSummaryCodepageWireVectors(t *testing.T) {
+	cases := []struct {
+		cp   int
+		text string
+		wire []byte
+	}{
+		{1252, "Müller €", []byte{'M', 0xfc, 'l', 'l', 'e', 'r', ' ', 0x80, 0}},
+		{65001, "é🚀", []byte{0xc3, 0xa9, 0xf0, 0x9f, 0x9a, 0x80, 0}},
+		{1200, "é🚀", []byte{0xe9, 0, 0x3d, 0xd8, 0x80, 0xde, 0, 0}},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprint(tc.cp), func(t *testing.T) {
+			encoded, err := encodeSummaryString(tc.text, tc.cp)
+			require.NoError(t, err)
+			value := encodeMSISummaryLPStr(encoded)
+			assert.Equal(t, uint32(len(tc.wire)), binary.LittleEndian.Uint32(value[4:8]))
+			assert.Equal(t, tc.wire, value[8:8+len(tc.wire)])
+			decoded, err := decodeSummaryString(tc.wire, tc.cp)
+			require.NoError(t, err)
+			assert.Equal(t, tc.text, decoded)
+		})
+	}
+	for _, wire := range [][]byte{{0}, {0, 0xd8, 0, 0}, {0, 0xdc, 0, 0}} {
+		_, err := decodeSummaryString(wire, 1200)
+		require.Error(t, err)
+	}
+	_, err := decodeSummaryString([]byte{0xff, 0}, 65001)
+	require.Error(t, err)
 }

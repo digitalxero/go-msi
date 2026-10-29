@@ -41,11 +41,13 @@ func hasUpgradeRemoveRows(p *msiPackage) bool {
 // msiConditionalActions is the static schedule of P4 standard actions at their
 // canonical WiX sequence numbers. RemoveExistingProducts is handled separately
 // because its sequence is configurable via MajorUpgrade().RemoveAfter.
+// FindRelatedProducts must run before LaunchConditions so downgrade detection
+// is populated even when /qn skips the UI sequence.
 var msiConditionalActions = []conditionalAction{
 	{msiInstallExecSeqTableName, "LaunchConditions", "", 100, hasLaunchConditionRows},
 	{msiInstallUISeqTableName, "LaunchConditions", "", 100, hasLaunchConditionRows},
-	{msiInstallExecSeqTableName, "FindRelatedProducts", "", 200, hasUpgradeRows},
-	{msiInstallUISeqTableName, "FindRelatedProducts", "", 200, hasUpgradeRows},
+	{msiInstallExecSeqTableName, "FindRelatedProducts", "", 25, hasUpgradeRows},
+	{msiInstallUISeqTableName, "FindRelatedProducts", "", 25, hasUpgradeRows},
 	{msiInstallExecSeqTableName, "AppSearch", "", 400, hasAppSearchRows},
 	{msiInstallUISeqTableName, "AppSearch", "", 400, hasAppSearchRows},
 	{msiInstallExecSeqTableName, "MigrateFeatureStates", "", 1200, hasUpgradeRows},

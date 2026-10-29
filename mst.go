@@ -162,7 +162,7 @@ func (t *msiTransform) summaryInfo() msiSummaryInfo {
 	lineage := t.base.productCode + t.base.version + ";" +
 		t.target.productCode + t.target.version + ";" + t.target.upgradeCode
 	return msiSummaryInfo{
-		Codepage: 1252,
+		Codepage: 0,
 		Title:    "Transform",
 		Author:   t.target.manufacturer,
 		// PID7 (Template): the platform and language the target database must

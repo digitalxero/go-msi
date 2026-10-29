@@ -451,8 +451,8 @@ func TestReadMSISummaryInfo_RoundTrip(t *testing.T) {
 
 	assert.Equal(t, "RT Product", info.Subject)
 	assert.Equal(t, "RT Co", info.Author)
-	assert.Equal(t, 200, info.PageCount)
-	assert.Equal(t, 2, info.WordCount)
+	assert.Equal(t, 400, info.PageCount)
+	assert.Equal(t, 10, info.WordCount)
 	assert.True(t, msiValidGUID(info.RevisionNumber),
 		"RevisionNumber %q should be a braced uppercase GUID", info.RevisionNumber)
 }
