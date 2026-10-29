@@ -28,7 +28,13 @@ type PackageBuilder interface {
 	WithProductName(name string) PackageBuilder
 	WithManufacturer(m string) PackageBuilder
 	WithVersion(v string) PackageBuilder // major.minor.build preferred
+	// WithAllUsers selects the install context. Per-user packages default to
+	// non-elevating authoring; resources must be writable by the installing user.
 	WithAllUsers(all bool) PackageBuilder
+	// WithElevatedPrivileges overrides the context's default privilege requirement.
+	// false sets Summary WordCount bit 3. It does not grant access to protected
+	// resources; deferred NoImpersonate actions also run as the installing user.
+	WithElevatedPrivileges(required bool) PackageBuilder
 
 	// Arbitrary properties (e.g. ProductLanguage, ALLUSERS handled via
 	// dedicated methods or here).
@@ -341,12 +347,13 @@ type FileBuilder interface {
 
 type msiPackage struct {
 	// identity
-	productCode  string
-	upgradeCode  string
-	productName  string
-	manufacturer string
-	version      string
-	allUsers     bool
+	productCode        string
+	upgradeCode        string
+	productName        string
+	manufacturer       string
+	version            string
+	allUsers           bool
+	elevatedPrivileges *bool
 
 	// properties
 	props map[string]string
@@ -522,6 +529,11 @@ func (p *msiPackage) WithVersion(v string) PackageBuilder {
 
 func (p *msiPackage) WithAllUsers(all bool) PackageBuilder {
 	p.allUsers = all
+	return p
+}
+
+func (p *msiPackage) WithElevatedPrivileges(required bool) PackageBuilder {
+	p.elevatedPrivileges = &required
 	return p
 }
 
@@ -737,7 +749,7 @@ func (p *msiPackage) WriteMSI(w io.Writer) error {
 	}
 
 	summary := msiSummaryInfo{
-		Codepage:       1252,
+		Codepage:       0,
 		Title:          "Installation Database",
 		Subject:        p.productName,
 		Author:         p.manufacturer,
@@ -750,6 +762,18 @@ func (p *msiPackage) WriteMSI(w io.Writer) error {
 		PageCount:      p.platformOrDefault().minSchemaVersion(),
 		WordCount:      2,
 		Security:       2,
+	}
+
+	elevated := p.allUsers
+	if p.elevatedPrivileges != nil {
+		elevated = *p.elevatedPrivileges
+	}
+	if !elevated {
+		summary.WordCount |= 8
+		// The non-elevating flag requires Windows Installer 4.0 or later.
+		if summary.PageCount < 400 {
+			summary.PageCount = 400
+		}
 	}
 
 	// P2: automatic ICE validation (validate-by-default). Only error-severity

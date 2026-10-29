@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"time"
+	"unicode/utf8"
 )
 
 // Variant type tags used by the summary property set (MS-OLEPS TypedPropertyValue).
@@ -81,7 +82,7 @@ var msiSummaryFmtID = [16]byte{
 // PageCount, WordCount) are always emitted, as is the Codepage, which must
 // precede any string property.
 type msiSummaryInfo struct {
-	Codepage       int       // PID 1; 0 means the 1252 default
+	Codepage       int       // PID 1; 0 selects 1252 for ASCII, 65001 otherwise
 	Title          string    // PID 2; conventionally "Installation Database"
 	Subject        string    // PID 3; ProductName
 	Author         string    // PID 4; Manufacturer
@@ -162,6 +163,20 @@ func buildMSISummaryStream(info msiSummaryInfo) ([]byte, error) {
 // msiSummaryProps converts info into encoded properties in ascending PID order.
 func msiSummaryProps(info msiSummaryInfo) ([]msiSummaryProp, error) {
 	props := make([]msiSummaryProp, 0, 14)
+	codepage := info.Codepage
+	if codepage == 0 {
+		codepage = msiSummaryDefaultCodepage
+		for _, s := range []string{info.Title, info.Subject, info.Author, info.Keywords, info.Comments, info.Template, info.LastSavedBy, info.RevisionNumber, info.CreatingApp} {
+			for _, r := range s {
+				if r > 127 {
+					codepage = int(utf8MSICodepage)
+				}
+			}
+		}
+	}
+	if codepage < 0 || codepage > math.MaxUint16 {
+		return nil, fmt.Errorf("summary codepage %d out of range", info.Codepage)
+	}
 
 	addString := func(pid uint32, s string, required bool) error {
 		if s == "" && !required {
@@ -170,7 +185,11 @@ func msiSummaryProps(info msiSummaryInfo) ([]msiSummaryProp, error) {
 		if err := validateMSISummaryString(s); err != nil {
 			return fmt.Errorf("summary property %d: %w", pid, err)
 		}
-		props = append(props, msiSummaryProp{pid: pid, val: encodeMSISummaryLPStr(s)})
+		encoded, err := encodeSummaryString(s, codepage)
+		if err != nil {
+			return fmt.Errorf("summary property %d: %w", pid, err)
+		}
+		props = append(props, msiSummaryProp{pid: pid, val: encodeMSISummaryLPStr(encoded)})
 		return nil
 	}
 	addI4 := func(pid uint32, v int, required bool) error {
@@ -195,13 +214,6 @@ func msiSummaryProps(info msiSummaryInfo) ([]msiSummaryProp, error) {
 	}
 
 	// PID 1 (codepage) must come first; it governs every VT_LPSTR below.
-	codepage := info.Codepage
-	if codepage == 0 {
-		codepage = msiSummaryDefaultCodepage
-	}
-	if codepage < 0 || codepage > math.MaxUint16 {
-		return nil, fmt.Errorf("summary codepage %d out of range", info.Codepage)
-	}
 	props = append(props, msiSummaryProp{pid: msiPIDCodepage, val: encodeMSISummaryI2(uint16(codepage))})
 
 	if err := addString(msiPIDTitle, info.Title, false); err != nil {
@@ -255,20 +267,14 @@ func msiSummaryProps(info msiSummaryInfo) ([]msiSummaryProp, error) {
 	return props, nil
 }
 
-// validateMSISummaryString rejects strings that cannot be serialized losslessly:
-// VT_LPSTR values are NUL-terminated 8-bit strings in the PID 1 codepage, so
-// embedded NULs are impossible and non-ASCII UTF-8 bytes would be misread
-// under codepage 1252.
+// validateMSISummaryString rejects malformed UTF-8 and embedded terminators.
 func validateMSISummaryString(s string) error {
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; {
-		case c == 0:
-			return errors.New("string must not contain NUL bytes")
-		case c > 0x7F:
-			return errors.New("string must be ASCII (summary strings are stored in the ANSI codepage)")
-		}
+	if !utf8.ValidString(s) {
+		return errors.New("string must be valid UTF-8")
 	}
-
+	if bytes.IndexByte([]byte(s), 0) >= 0 {
+		return errors.New("string must not contain NUL bytes")
+	}
 	return nil
 }
 
@@ -361,11 +367,26 @@ func parseMSISummaryStream(data []byte) (msiSummaryInfo, error) {
 		return info, fmt.Errorf("summary property table truncated: %d properties", count)
 	}
 
+	codepage := msiSummaryDefaultCodepage
+	for i := uint64(0); i < uint64(count); i++ {
+		if binary.LittleEndian.Uint32(section[8+8*i:]) != msiPIDCodepage {
+			continue
+		}
+		off := binary.LittleEndian.Uint32(section[12+8*i:])
+		val, err := decodeMSISummaryValue(section, off, codepage)
+		if err != nil {
+			return info, fmt.Errorf("summary codepage: %w", err)
+		}
+		if cp, ok := val.(int); ok {
+			codepage = cp
+		}
+	}
+
 	for i := uint64(0); i < uint64(count); i++ {
 		pid := binary.LittleEndian.Uint32(section[8+8*i:])
 		off := binary.LittleEndian.Uint32(section[12+8*i:])
 
-		val, err := decodeMSISummaryValue(section, off)
+		val, err := decodeMSISummaryValue(section, off, codepage)
 		if err != nil {
 			return info, fmt.Errorf("summary property %d: %w", pid, err)
 		}
@@ -382,7 +403,7 @@ func parseMSISummaryStream(data []byte) (msiSummaryInfo, error) {
 // decodeMSISummaryValue decodes the TypedPropertyValue at the given
 // section-relative offset. It returns an int for VT_I2/VT_I4, a string for
 // VT_LPSTR, a time.Time for VT_FILETIME, or nil for unknown variant types.
-func decodeMSISummaryValue(section []byte, off uint32) (any, error) {
+func decodeMSISummaryValue(section []byte, off uint32, codepage int) (any, error) {
 	if uint64(off)+8 > uint64(len(section)) {
 		return nil, fmt.Errorf("value offset %d out of range", off)
 	}
@@ -408,11 +429,8 @@ func decodeMSISummaryValue(section []byte, off uint32) (any, error) {
 			return nil, fmt.Errorf("string value of %d bytes truncated", cb)
 		}
 		s := body[4 : 4+cb]
-		if n := bytes.IndexByte(s, 0); n >= 0 {
-			s = s[:n] // drop the NUL terminator and anything after it
-		}
+		return decodeSummaryString(s, codepage)
 
-		return string(s), nil
 	default:
 		return nil, nil
 	}

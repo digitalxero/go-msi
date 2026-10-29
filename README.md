@@ -341,3 +341,45 @@ Generated output is verified at several layers, all green in CI:
 ## License
 
 See [LICENSE](LICENSE) for details.
+
+### Per-user privileges and Unicode metadata
+
+`WithAllUsers(false)` omits `ALLUSERS` and marks the package as non-elevating
+(Summary WordCount `2 | 8`, minimum Windows Installer 4.0). Install resources
+into locations writable by the installing user, such as an `INSTALLFOLDER`
+resolved under LocalAppData, and use HKCU for registry resources. This flag does
+not grant permission to install services, write HKLM, or write Program Files.
+Deferred custom actions, including `NoImpersonate()` actions, run with user
+privileges in a non-elevating package; they must support that context.
+
+`WithElevatedPrivileges(true)` explicitly restores the previous privilege
+requirement for a per-user package that needs elevation. Conversely,
+`WithElevatedPrivileges(false)` explicitly marks a package as non-elevating.
+This override is independent of builder call order. Per-machine packages retain
+their existing defaults (`ALLUSERS=1`, WordCount `2`).
+
+Pass original UTF-8 names to `WithProductName` and `WithManufacturer`, including
+accents, non-Latin text, and supplementary characters. Summary strings are
+encoded as OLE `VT_LPSTR` CodePageStrings in code page 65001 when non-ASCII text
+is present; ASCII-only summaries retain code page 1252. `Open(...).Summary()`
+returns the original strings. No transliteration, normalization, or identity
+seed change is performed. Summary decoding supports Windows-1252, UTF-8, and
+OLE CP_WINUNICODE (1200); unsupported code pages return an error.
+
+Major-upgrade detection precedes launch conditions in both install sequences,
+including silent installs. `MajorUpgrade().AllowDowngrades()` continues to disable
+the downgrade block; author a separate open-ended `Upgrade` removal rule when
+the newer product should also be removed:
+
+```go
+builder.MajorUpgrade().AllowDowngrades()
+builder.Upgrade(upgradeCode).
+    DetectRange(version, "").
+    ActionProperty("REMOVE_NEWER")
+```
+
+Sources: [non-elevating packages](https://learn.microsoft.com/en-us/windows/win32/msi/authoring-packages-without-the-uac-dialog-box),
+[WordCount flags](https://learn.microsoft.com/en-us/windows/win32/msi/word-count-summary),
+[Summary code page](https://learn.microsoft.com/en-us/windows/win32/msi/codepage-summary),
+[OLE CodePageString](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-oleps/a4c32611-5b79-4965-8f50-50639c138e16),
+[Windows code pages](https://learn.microsoft.com/en-us/windows/win32/intl/code-page-identifiers).

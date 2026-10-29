@@ -257,7 +257,7 @@ func (p *msiPatch) summaryInfo() msiSummaryInfo {
 		subject = p.description
 	}
 	return msiSummaryInfo{
-		Codepage:       1252,
+		Codepage:       0,
 		Title:          "Patch",
 		Subject:        subject,
 		Author:         p.manufacturer,

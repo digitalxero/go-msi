@@ -101,3 +101,56 @@ func TestOpen_RejectsNonMSI(t *testing.T) {
 	_, err := msi.Open(bytes.NewReader([]byte("not a compound file")))
 	require.Error(t, err)
 }
+
+func TestMajorUpgradeDetectionPrecedesLaunchConditions(t *testing.T) {
+	db := openExamplePackage(t, readerTestPackage())
+	for _, table := range []string{"InstallUISequence", "InstallExecuteSequence"} {
+		rows, err := db.Table(table)
+		require.NoError(t, err)
+		actions := map[string]int16{}
+		for _, row := range rows {
+			actions[row["Action"].(string)] = row["Sequence"].(int16)
+		}
+		require.Contains(t, actions, "FindRelatedProducts")
+		require.Contains(t, actions, "LaunchConditions")
+		assert.Less(t, actions["FindRelatedProducts"], actions["LaunchConditions"], table)
+	}
+}
+
+func TestPerUserSummaryDoesNotRequireElevation(t *testing.T) {
+	db := openExamplePackage(t, readerTestPackage().WithAllUsers(false))
+	assert.Equal(t, 2|8, db.Summary().WordCount())
+	rows, err := db.Table("Property")
+	require.NoError(t, err)
+	for _, row := range rows {
+		assert.NotEqual(t, "ALLUSERS", row["Property"])
+	}
+	assert.Equal(t, 2, openExamplePackage(t, readerTestPackage().WithAllUsers(true)).Summary().WordCount())
+}
+
+func TestUnicodeMetadataPersists(t *testing.T) {
+	for _, name := range []string{"Müller café", "日本語 Привет", "Tools 🚀"} {
+		t.Run(name, func(t *testing.T) {
+			db := openExamplePackage(t, readerTestPackage().WithProductName(name).WithManufacturer(name))
+			assert.Equal(t, name, db.Summary().Subject())
+			assert.Equal(t, name, db.Summary().Author())
+			assert.Equal(t, 65001, db.Summary().CodePage())
+			rows, err := db.Table("Property")
+			require.NoError(t, err)
+			for _, row := range rows {
+				if row["Property"] == "ProductName" || row["Property"] == "Manufacturer" {
+					assert.Equal(t, name, row["Value"])
+				}
+			}
+		})
+	}
+}
+
+func TestSummaryElevationOverride(t *testing.T) {
+	for _, all := range []bool{false, true} {
+		b := readerTestPackage().WithElevatedPrivileges(false).WithAllUsers(all)
+		assert.Equal(t, 10, openExamplePackage(t, b).Summary().WordCount())
+		b = readerTestPackage().WithElevatedPrivileges(true).WithAllUsers(all)
+		assert.Equal(t, 2, openExamplePackage(t, b).Summary().WordCount())
+	}
+}

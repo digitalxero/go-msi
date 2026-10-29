@@ -1,8 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  workflow_call:
   pull_request:
 
 jobs:
@@ -30,6 +29,9 @@ jobs:
       - name: Full Darice ICE and real Windows Installer consumer
         shell: pwsh
         run: ./scripts/verify_windows.ps1
+      - name: Silent downgrade, non-admin install, and Unicode regressions
+        shell: pwsh
+        run: ./scripts/verify_regressions_windows.ps1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
