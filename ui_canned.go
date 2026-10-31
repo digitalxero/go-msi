@@ -90,7 +90,20 @@ func expandMinimalUI(p *msiPackage) {
 			cText("StatusText", 35, 100, 320, 20, "").withMapping("ActionText", "Text"),
 			cProgress("ProgressBar", 35, 125, 300, 12).withMapping("SetProgress", "Progress"),
 			cButton("Cancel", 304, 243, 56, 17, "Cancel").
-				withEvent("EndDialog", "Exit", ""),
+				withEvent("SpawnDialog", "CancelDlg", "1"),
+		},
+	}
+
+	// A modeless dialog cannot end the wizard directly. Its Cancel control
+	// opens this modal confirmation; No returns to progress, Yes requests exit.
+	cancel := dialogEntry{
+		id: "CancelDlg", hCentering: 50, vCentering: 50, width: 270, height: 100,
+		attributes: int32(DialogVisible | DialogModal), title: "[ProductName] Setup",
+		controlFirst: "No", controlDefault: "No", controlCancel: "No",
+		controls: []controlEntry{
+			cText("Question", 15, 15, 240, 35, "Are you sure you want to cancel setup?"),
+			cButton("Yes", 134, 70, 56, 17, "Yes").withEvent("EndDialog", "Exit", "1"),
+			cButton("No", 198, 70, 56, 17, "No").withEvent("EndDialog", "Return", "1"),
 		},
 	}
 
@@ -175,7 +188,7 @@ func expandMinimalUI(p *msiPackage) {
 			cButton("Retry", 296, 243, 64, 17, "Retry").withEvent("EndDialog", "Retry", "1"),
 		},
 	}
-	p.dialogEntries = append(p.dialogEntries, welcome, progress, exit, fatal, userExit, errorDialog, filesInUse)
+	p.dialogEntries = append(p.dialogEntries, welcome, progress, cancel, exit, fatal, userExit, errorDialog, filesInUse)
 }
 
 // ----- compact control constructors used by the canned UI -----

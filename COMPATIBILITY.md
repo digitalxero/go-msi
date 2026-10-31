@@ -90,7 +90,8 @@ trailing spaces. Names are rejected, never silently changed. Representable
 Unicode and leading-dot names remain supported. Directory `DefaultDir` accepts
 MSI `target[:source]` syntax, optional `short|long` pairs and the `.` sentinel;
 its ordinary name parts undergo the same checks. Literal and explicit short
-names are reserved before generated aliases across sibling files/directories.
+names are reserved before generated aliases across sibling files, directories
+and shortcuts.
 Case-only sibling duplicates and duplicate explicit aliases are errors. The `.`
 target sentinel shares its parent's namespace; standard Windows directory
 properties retain their independently resolved namespaces.
@@ -99,7 +100,8 @@ Native CI (`scripts/verify_authoring_windows.ps1`) checks changed-payload recach
 and source repair with stable product/component identities; installs, reads and
 removes short-name payloads with `SHORTFILENAMES=1`; preserves Unicode/leading-dot
 names with long names enabled; and drives real full-UI license acceptance,
-progress, success, welcome/progress cancellation, and error dialogs. It retains
+progress, success, welcome/progress cancellation, and error dialogs. Progress
+cancellation opens a modal confirmation: No continues installation and Yes exits. It retains
 native API assertions, full Darice ICE reports, dialog text/screenshots and MSI
 logs in `official-msi-compatibility`. The existing downgrade, ordinary-user SID,
 Unicode metadata, patch and signature gates continue to run. AllowDowngrades

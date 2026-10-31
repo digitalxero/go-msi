@@ -256,7 +256,7 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 	targetNamer := func(id string) *msiShortNamer { return namerFor("target:" + physicalDir(id)) }
 	sourceNamer := func(id string) *msiShortNamer { return namerFor("source:" + id) }
 	// Reserve every literal/explicit short name before any generated aliases.
-	// This includes files and child directories, regardless of emission order.
+	// This includes files, child directories and shortcuts, regardless of emission order.
 	for id, e := range p.dirEntries {
 		if id == "TARGETDIR" {
 			continue
@@ -286,6 +286,16 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			if err := targetNamer(c.dirID).reserve(f.name); err != nil {
 				return nil, err
 			}
+		}
+	}
+
+	for _, e := range p.shortcutEntries {
+		dir := cmp.Or(e.directory, "INSTALLFOLDER")
+		if err := msiValidateLongName(e.name); err != nil {
+			return nil, fmt.Errorf("msi compile: Shortcut name %q: %w", e.name, err)
+		}
+		if err := targetNamer(dir).reserve(e.name); err != nil {
+			return nil, err
 		}
 	}
 
@@ -532,7 +542,7 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			// short name needs the short|long form, from the namer of the
 			// directory the shortcut is created in (it shares that directory's
 			// namespace with any files installed there).
-			nameColumn, err := namerFor(dir).msiFileNameColumn(e.name)
+			nameColumn, err := targetNamer(dir).msiFileNameColumn(e.name)
 			if err != nil {
 				return nil, fmt.Errorf("msi compile: Shortcut %s name %q: %w", scID, e.name, err)
 			}

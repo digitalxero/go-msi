@@ -62,7 +62,16 @@ function Run-Wizard([string]$Kind, [string]$Mode) {
       Click-Dialog $w 'Install'
       $w = Wait-Dialog $title "Installing Go MSI $Kind"
       Save-Dialog $w "$Mode-progress"
-      if ($Mode -eq 'cancel-progress') { Click-Dialog $w 'Cancel' }
+      if ($Mode -eq 'cancel-progress' -or $Mode -eq 'success') {
+        Click-Dialog $w 'Cancel'
+        $confirmation = Wait-Dialog $title 'Are you sure you want to cancel setup?'
+        Save-Dialog $confirmation "$Mode-cancel-confirmation"
+        if ($Mode -eq 'success') {
+          Click-Dialog $confirmation 'No'
+          $w = Wait-Dialog $title "Installing Go MSI $Kind"
+          Save-Dialog $w 'success-continued-after-cancel-no'
+        } else { Click-Dialog $confirmation 'Yes' }
+      }
     }
     $terminal = switch ($Mode) {
       'success' { "Completed the Go MSI $Kind Setup" }
@@ -109,7 +118,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Authoring fixture generator failed' }
   $manifest = Get-Content (Join-Path $fixture 'manifest.json') -Raw -Encoding utf8 | ConvertFrom-Json
   $iceFailures = @()
-  foreach ($kind in @('repair-a','repair-b','aliases','ui-success','ui-cancel','ui-error','names')) {
+  foreach ($kind in @('repair-a','repair-b','aliases','ui-success','ui-cancel','ui-error','names','shortcuts')) {
     $package = Join-Path $fixture "$kind/package.msi"
     $summary = $installer.SummaryInformation($package,0)
     if ($summary.Property(9) -cne $manifest.$kind.packageCode) { throw "$kind PackageCode differs through native API" }
@@ -170,6 +179,28 @@ try {
   } finally { Run-MSI "/x `"$package`" /qn /norestart" }
   Assert-Unregistered $manifest.names.code
   Write-Host 'NATIVE_UNICODE_AND_LEADING_DOT_NAMES_INSTALL_REMOVE_OK'
+
+  $package = Join-Path $fixture 'shortcuts/package.msi'
+  $target = Join-Path $fixture 'shortcut-install'
+  try {
+    Run-MSI "/i `"$package`" /qn /norestart SHORTFILENAMES=1 INSTALLFOLDER=`"$target`" /L*V `"$fixture\shortcut-install.log`""
+    foreach ($row in $manifest.shortcuts.files) {
+      if ($row.Component_ -eq 'LinkTarget') { continue }
+      $name = $row.FileName.Split('|')[0]
+      $long = $row.FileName.Split('|')[-1]
+      Assert-Payload (Join-Path $target $name) $manifest.shortcuts.payloads.$long
+    }
+    $link = Join-Path $target $manifest.shortcuts.shortcuts[0].Name.Split('|')[0]
+    if (-not (Test-Path -LiteralPath $link)) { throw "Shortcut missing: $link" }
+    if ((Get-Item -LiteralPath $link).Length -lt 76) { throw 'Shortcut has no shell link header' }
+    $header = [IO.File]::ReadAllBytes($link)
+    if ([BitConverter]::ToUInt32($header,0) -ne 76) { throw 'Shortcut was replaced by a payload' }
+    Write-Host 'NATIVE_SHORT_FILENAMES_PAYLOAD_AND_SHORTCUT_COEXIST_OK'
+  } finally { Run-MSI "/x `"$package`" /qn /norestart /L*V `"$fixture\shortcut-remove.log`"" }
+  Assert-Unregistered $manifest.shortcuts.code
+  if (Test-Path $target) {
+    if (@(Get-ChildItem $target -Recurse -File -Force).Count -ne 0) { throw 'Shortcut uninstall left files' }
+  }
 
   Add-Type -Path (Join-Path $PSScriptRoot 'native_ui_driver.cs')
   Add-Type -AssemblyName System.Drawing

@@ -367,3 +367,64 @@ func TestMinimalUIStandardMessageAndTerminalDialogs(t *testing.T) {
 	}
 	assert.True(t, found)
 }
+
+func TestShortNamesShareFileAndShortcutNamespace(t *testing.T) {
+	for _, names := range [][2]string{{"abcdef1long.lnk", "abcdef2long.lnk"}, {"abcdef~1.lnk", "abcdef2long.lnk"}, {"abcdef1long.lnk", "ABCDEF~1.LNK"}} {
+		for _, dot := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%s/dot=%v", names[0], names[1], dot), func(t *testing.T) {
+				b := authoringPackage("base")
+				d := b.Directory("INSTALLFOLDER")
+				c := d.Component("Sibling").AssociateToFeature("Main")
+				c.WithFile(names[0], msi.FileSourceFromBytes([]byte("distinct payload")))
+				dir := "INSTALLFOLDER"
+				if dot {
+					d.Subdirectory("Dot", ".")
+					dir = "Dot"
+				}
+				c.Shortcut(names[1], "[INSTALLFOLDER]payload.txt").InDirectory(dir)
+				_, db := authoredBytes(t, b)
+				files, err := db.Table("File")
+				require.NoError(t, err)
+				shortcuts, err := db.Table("Shortcut")
+				require.NoError(t, err)
+				require.Len(t, shortcuts, 1)
+				alias := strings.ToUpper(strings.Split(shortcuts[0]["Name"].(string), "|")[0])
+				for _, row := range files {
+					assert.NotEqual(t, alias, strings.ToUpper(strings.Split(row["FileName"].(string), "|")[0]))
+				}
+			})
+		}
+	}
+}
+
+func TestModelessProgressSpawnsModalCancelConfirmation(t *testing.T) {
+	_, db := authoredBytes(t, authoringPackage("base").WithMinimalUI())
+	rows, err := db.Table("Dialog")
+	require.NoError(t, err)
+	found := false
+	for _, row := range rows {
+		if row["Dialog"] == "CancelDlg" {
+			assert.NotZero(t, row["Attributes"].(int32)&int32(msi.DialogModal))
+			found = true
+		}
+	}
+	assert.True(t, found)
+	rows, err = db.Table("ControlEvent")
+	require.NoError(t, err)
+	events := map[string]string{}
+	progressCancel := false
+	for _, row := range rows {
+		dialog, control := row["Dialog_"].(string), row["Control_"].(string)
+		if dialog == "ProgressDlg" && control == "Cancel" {
+			assert.Equal(t, "SpawnDialog", row["Event"])
+			assert.Equal(t, "CancelDlg", row["Argument"])
+			progressCancel = true
+		}
+		if dialog == "CancelDlg" {
+			assert.Equal(t, "EndDialog", row["Event"])
+			events[control] = row["Argument"].(string)
+		}
+	}
+	assert.True(t, progressCancel)
+	assert.Equal(t, map[string]string{"Yes": "Exit", "No": "Return"}, events)
+}

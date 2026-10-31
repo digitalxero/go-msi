@@ -19,7 +19,7 @@ func main() {
 	must(err)
 	must(os.MkdirAll(out, 0o755))
 	manifest := map[string]map[string]any{}
-	for i, kind := range []string{"repair-a", "repair-b", "aliases", "ui-success", "ui-cancel", "ui-error", "names"} {
+	for i, kind := range []string{"repair-a", "repair-b", "aliases", "ui-success", "ui-cancel", "ui-error", "names", "shortcuts"} {
 		code := fmt.Sprintf("{A6223300-4455-4666-8777-%012d}", i+1)
 		if kind == "repair-b" {
 			code = "{A6223300-4455-4666-8777-000000000001}"
@@ -46,6 +46,12 @@ func main() {
 			child := d.Subdirectory("LongDirectory", "ghijkl1long.txt")
 			add(child, "Child", "child.txt", "CHILD PAYLOAD")
 			add(d, "DirectoryLiteral", "ghijkl~1.txt", "DIRECTORY SIBLING")
+		case "shortcuts":
+			add(d, "LongLinkPayload", "abcdef1long.lnk", "PLAIN PAYLOAD WITH LINK EXTENSION")
+			add(d, "LiteralLinkPayload", "abcdef~1.lnk", "LITERAL PAYLOAD WITH LINK EXTENSION")
+			c := d.Component("LinkTarget").AssociateToFeature("Main")
+			c.WithFile("payload.txt", msi.FileSourceFromBytes([]byte("SHORTCUT TARGET")))
+			c.Shortcut("abcdef2long.lnk", "Main").Advertised("Main")
 		case "names":
 			add(d, "Unicode", "résumé.txt", "UNICODE PAYLOAD")
 			add(d, "LeadingDot", ".config", "LEADING DOT PAYLOAD")
@@ -54,7 +60,7 @@ func main() {
 			add(d, "Payload", "payload.txt", kind)
 			// Keep progress visible and process real MSI messages during this interval.
 			// The condition also permits cancellation while the execute sequence runs.
-			b.CustomAction("VisibleProgress").EXEFromDirectory("SystemFolder", `"[SystemFolder]cmd.exe" /c ping -n 6 127.0.0.1 > nul`).
+			b.CustomAction("VisibleProgress").EXEFromDirectory("SystemFolder", `"[SystemFolder]cmd.exe" /c ping -n 16 127.0.0.1 > nul`).
 				ScheduleAfter(msi.InstallExecuteSequence, "InstallFiles", "NOT Installed")
 			if kind == "ui-error" {
 				b.CustomAction("ForcedFailure").ErrorMessage("Intentional native UI regression failure").ScheduleBefore(msi.InstallExecuteSequence, "InstallFinalize", "NOT Installed")
@@ -74,7 +80,12 @@ func main() {
 		must(err)
 		dirs, err := db.Table("Directory")
 		must(err)
-		manifest[kind] = map[string]any{"code": code, "packageCode": db.Summary().Revision(), "product": "Go MSI " + kind, "files": files, "directories": dirs, "payloads": payloads}
+		var shortcuts []msi.Row
+		if kind == "shortcuts" {
+			shortcuts, err = db.Table("Shortcut")
+			must(err)
+		}
+		manifest[kind] = map[string]any{"code": code, "packageCode": db.Summary().Revision(), "product": "Go MSI " + kind, "files": files, "directories": dirs, "shortcuts": shortcuts, "payloads": payloads}
 	}
 	// Public authoring must fail before output, on Windows too.
 	for _, name := range []string{"CON", "NUL.txt", "COM1.log", "LPT9", "COM¹.txt", "LPT².log", "COM³", "readme.txt.", "readme.txt "} {
