@@ -120,6 +120,54 @@ function Run-Wizard([string]$Kind, [string]$Mode) {
     }
   }
 }
+# The pinned SDK's ICE30 fails on lowercase accented names, even after native
+# re-encoding. A native case-only copy passes. Audit that exact transformation,
+# validate every ICE on it, and prove ICE30 rejects an introduced collision.
+# The original package still has to install/read/remove its exact requested names.
+function Edit-ControlNames([string]$Path, [bool]$Collision) {
+  $database = $installer.OpenDatabase($Path,1)
+  $view = $database.OpenView('SELECT `File`, `FileName` FROM `File`')
+  $view.Execute()
+  $names = @()
+  while ($record = $view.Fetch()) {
+    $names += @{ File = $record.StringData(1); Name = $record.StringData(2).ToUpperInvariant() }
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record)
+  }
+  $view.Close()
+  [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
+  foreach ($entry in $names) {
+    $update = $database.OpenView('UPDATE `File` SET `FileName` = ? WHERE `File` = ?')
+    $record = $installer.CreateRecord(2)
+    $record.StringData(1) = if ($Collision) { $names[0].Name } else { $entry.Name }
+    $record.StringData(2) = $entry.File
+    $update.Execute($record)
+    $update.Close()
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($update)
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record)
+  }
+  $database.Commit()
+  [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database)
+}
+function Test-UnicodeICEControls([string]$Package, [string]$Kind) {
+  $positive = Join-Path $fixture "$Kind-case-control.msi"
+  Copy-Item $Package $positive
+  Edit-ControlNames $positive $false
+  go run ./internal/verifyicecontrol $Package $positive
+  if ($LASTEXITCODE -ne 0) { throw "$Kind case-only table/Summary audit failed" }
+  $positiveLog = Join-Path $fixture "$Kind-case-control-ice.log"
+  & $env:UPB_MSIVAL2 $positive $env:UPB_DARICE_CUB -f -l $positiveLog
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $positiveLog)) { throw "$Kind case-control Darice failed" }
+  if (([string](Get-Content $positiveLog -Raw -Encoding Unicode)).Trim() -ne '') { throw "$Kind case-control Darice report is not clean" }
+  $negative = Join-Path $fixture "$Kind-collision-control.msi"
+  Copy-Item $positive $negative
+  Edit-ControlNames $negative $true
+  $negativeLog = Join-Path $fixture "$Kind-collision-control-ice.log"
+  & $env:UPB_MSIVAL2 $negative $env:UPB_DARICE_CUB -f -l $negativeLog
+  if ($LASTEXITCODE -eq 0 -or -not (Test-Path $negativeLog)) { throw "$Kind collision control was not rejected" }
+  if ((Get-Content $negativeLog -Raw -Encoding Unicode) -notmatch '(?im)^ICE30\s+ERROR\s') { throw "$Kind negative control did not detect the collision with ICE30" }
+  Write-Host "NATIVE_UNICODE_ICE30_CASE_CONTROL_AND_COLLISION_REJECTION_OK $Kind"
+}
+
 try {
   $nativeBuild = Join-Path $fixture 'native-progress'
   & (Join-Path $PSScriptRoot 'build_native_progress.ps1') -OutputDirectory $nativeBuild
@@ -134,48 +182,15 @@ try {
     $iceLog = Join-Path $fixture "$kind-ice.log"
     & $env:UPB_MSIVAL2 $package $env:UPB_DARICE_CUB -f -l $iceLog
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $iceLog)) { $iceFailures += "$kind Darice failed (exit $LASTEXITCODE)" }
-    if ((Test-Path $iceLog) -and (Get-Content $iceLog -Raw -Encoding Unicode) -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b|ICE Internal Error)') { $iceFailures += "$kind ICE errors or incomplete validation" }
-  }
-
-  Invoke-Scenario 'codepage-control' {
-    # Diagnose the SDK's ICE30 failure against an equivalent, natively
-    # re-encoded copy. This never modifies the authored MSI or waives its gate.
-    $control = Join-Path $fixture 'names-codepage1252.msi'
-    Copy-Item (Join-Path $fixture 'names/package.msi') $control
-    $idt = Join-Path $fixture '_ForceCodepage.idt'
-    [IO.File]::WriteAllText($idt, "`r`n`r`n1252`t_ForceCodepage`r`n", [Text.Encoding]::ASCII)
-    $controlDB = $installer.OpenDatabase($control, 1)
-    $controlDB.Import($fixture, '_ForceCodepage.idt')
-    $controlDB.Commit()
-    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($controlDB)
-    & $env:UPB_MSIVAL2 $control $env:UPB_DARICE_CUB -f -l (Join-Path $fixture 'names-codepage1252-ice.log')
-    Write-Host "Native codepage control Darice exit: $LASTEXITCODE"
-    # A second native control isolates Unicode case comparison in ICE30.
-    # Preserve and test the original-cased authored package separately above.
-    $folded = Join-Path $fixture 'names-uppercase-control.msi'
-    Copy-Item (Join-Path $fixture 'names/package.msi') $folded
-    $foldDB = $installer.OpenDatabase($folded, 1)
-    $query = $foldDB.OpenView('SELECT `File`, `FileName` FROM `File`')
-    $query.Execute()
-    while ($row = $query.Fetch()) {
-      Write-Host "Native original filename: $($row.StringData(2))"
-      $update = $foldDB.OpenView('UPDATE `File` SET `FileName` = ? WHERE `File` = ?')
-      $updateRecord = $installer.CreateRecord(2)
-      $updateRecord.StringData(1) = $row.StringData(2).ToUpperInvariant()
-      $updateRecord.StringData(2) = $row.StringData(1)
-      $update.Execute($updateRecord)
-      $update.Close()
-      [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($update)
-      [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($updateRecord)
-      [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($row)
+    if (Test-Path $iceLog) {
+      $report = ([string](Get-Content $iceLog -Raw -Encoding Unicode)).Trim()
+      $knownCaseFailure = $kind -in @('names','names-unicode') -and $report -match '^ICE30\s+UNKNOWN\s+ICE Internal Error 23\. API Returned: 259\.$'
+      if ($knownCaseFailure) {
+        Invoke-Scenario "$kind-ICE30-native-controls" { Test-UnicodeICEControls $package $kind }
+      } elseif ($report -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b|ICE Internal Error)') {
+        $iceFailures += "$kind ICE errors or incomplete validation"
+      }
     }
-    $query.Close()
-    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($query)
-    $foldDB.Commit()
-    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($foldDB)
-    & $env:UPB_MSIVAL2 $folded $env:UPB_DARICE_CUB -f -l (Join-Path $fixture 'names-uppercase-control-ice.log')
-    Write-Host "Native uppercase control Darice exit: $LASTEXITCODE"
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $fixture 'names-uppercase-control-ice.log'))) { throw 'Native uppercase control could not be validated' }
   }
 
   Add-Type -Path (Join-Path $PSScriptRoot 'native_ui_driver.cs')
@@ -233,17 +248,20 @@ try {
     }
   }
 
-  Invoke-Scenario 'names' {
-    # With long names enabled, preserve supported Unicode and leading-dot names.
-    $package = Join-Path $fixture 'names/package.msi'
-    $target = Join-Path $fixture 'names-install'
-    try {
-      Run-MSI "/i `"$package`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$fixture\names-install.log`""
-      Assert-Payload (Join-Path $target 'résumé.txt') 'UNICODE PAYLOAD'
-      Assert-Payload (Join-Path $target '.config') 'LEADING DOT PAYLOAD'
-    } finally { Run-MSI "/x `"$package`" /qn /norestart" }
-    Assert-Unregistered $manifest.names.code
-    Write-Host 'NATIVE_UNICODE_AND_LEADING_DOT_NAMES_INSTALL_REMOVE_OK'
+  foreach ($nameKind in @('names','names-unicode','names-dot')) {
+    Invoke-Scenario "$nameKind-install-remove" {
+      $package = Join-Path $fixture "$nameKind/package.msi"
+      $target = Join-Path $fixture "$nameKind-install"
+      try {
+        Run-MSI "/i `"$package`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$fixture\$nameKind-install.log`""
+        foreach ($payload in $manifest.$nameKind.payloads.psobject.Properties) {
+          Assert-Payload (Join-Path $target $payload.Name) $payload.Value
+        }
+      } finally { Run-MSI "/x `"$package`" /qn /norestart /L*V `"$fixture\$nameKind-remove.log`"" }
+      Assert-Unregistered $manifest.$nameKind.code
+      if ((Test-Path $target) -and @(Get-ChildItem $target -Recurse -File -Force).Count -ne 0) { throw "$nameKind uninstall left files" }
+      Write-Host "NATIVE_EXACT_REQUESTED_NAMES_INSTALL_REMOVE_OK $nameKind"
+    }
   }
 
   Invoke-Scenario 'shortcuts' {

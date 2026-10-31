@@ -112,3 +112,23 @@ logs in `official-msi-compatibility`. The existing downgrade, ordinary-user SID,
 Unicode metadata, patch and signature gates continue to run. AllowDowngrades
 still only disables the newer-product block; removing newer products requires a
 separate authored Upgrade row.
+
+### SDK Unicode case comparison in ICE30
+
+The pinned SDK's ICE30 reports `ICE Internal Error 23. API Returned: 259` for
+lowercase accented FileName values such as `résumé.txt`. Native Installer reads,
+installs and removes that exact name correctly. A native API edit that only
+uppercases the FileName strings makes the full Darice run clean; forcing codepage
+1252 alone does not fix it. Preserved original/control receipts are in the
+`official-msi-compatibility` artifact.
+
+For only that exact SDK error in the two bounded accented-name fixtures, CI
+requires full Darice validation on a case-only native copy. A separate Go audit
+requires every other table value, all Summary metadata, root CLSID and non-table
+streams (including cabinet bytes) to remain identical. It also requires ICE30 to
+reject a deliberately introduced Unicode filename collision. The original MSI
+must independently install/read/remove every exact requested name. The copy is
+used only for validation: shipped/installed names are never uppercased. Different
+errors, affected fixtures, control/audit failures and native execution failures
+still fail the job. This records the raw SDK limitation without treating its
+internal error as a successful check or suppressing collision validation.
