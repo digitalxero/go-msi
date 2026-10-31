@@ -41,7 +41,7 @@ try {
     & $env:UPB_MSIVAL2 $package $env:UPB_DARICE_CUB -f -l $iceLog
     if ($LASTEXITCODE -ne 0) { throw "$kind Darice validation failed" }
     if (-not (Test-Path $iceLog)) { throw "$kind ICE report missing" }
-    if ((Get-Content $iceLog -Raw) -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b)') { throw "$kind ICE errors" }
+    if ((Get-Content $iceLog -Raw -Encoding Unicode) -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b|ICE Internal Error)') { throw "$kind ICE errors" }
   }
   $target = Join-Path $fixture 'machine-install'
   $newer = Join-Path $fixture 'newer.msi'

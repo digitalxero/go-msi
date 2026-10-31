@@ -108,14 +108,15 @@ try {
   go run ./internal/authoringfixture $fixture
   if ($LASTEXITCODE -ne 0) { throw 'Authoring fixture generator failed' }
   $manifest = Get-Content (Join-Path $fixture 'manifest.json') -Raw -Encoding utf8 | ConvertFrom-Json
-  foreach ($kind in @('repair-a','repair-b','aliases','ui-success','ui-cancel','ui-error')) {
+  $iceFailures = @()
+  foreach ($kind in @('repair-a','repair-b','aliases','ui-success','ui-cancel','ui-error','names')) {
     $package = Join-Path $fixture "$kind/package.msi"
     $summary = $installer.SummaryInformation($package,0)
     if ($summary.Property(9) -cne $manifest.$kind.packageCode) { throw "$kind PackageCode differs through native API" }
     $iceLog = Join-Path $fixture "$kind-ice.log"
     & $env:UPB_MSIVAL2 $package $env:UPB_DARICE_CUB -f -l $iceLog
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $iceLog)) { throw "$kind Darice failed" }
-    if ((Get-Content $iceLog -Raw) -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b)') { throw "$kind ICE errors" }
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $iceLog)) { $iceFailures += "$kind Darice failed (exit $LASTEXITCODE)" }
+    if ((Test-Path $iceLog) -and (Get-Content $iceLog -Raw -Encoding Unicode) -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b|ICE Internal Error)') { $iceFailures += "$kind ICE errors or incomplete validation" }
   }
 
   $a = Join-Path $fixture 'repair-a/package.msi'
@@ -161,12 +162,13 @@ try {
     if (@(Get-ChildItem $target -Recurse -File -Force).Count -ne 0) { throw 'Alias uninstall left files' }
   }
   # With long names enabled, preserve supported Unicode and leading-dot names.
+  $package = Join-Path $fixture 'names/package.msi'
   try {
     Run-MSI "/i `"$package`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$fixture\names-install.log`""
     Assert-Payload (Join-Path $target 'résumé.txt') 'UNICODE PAYLOAD'
     Assert-Payload (Join-Path $target '.config') 'LEADING DOT PAYLOAD'
   } finally { Run-MSI "/x `"$package`" /qn /norestart" }
-  Assert-Unregistered $manifest.aliases.code
+  Assert-Unregistered $manifest.names.code
   Write-Host 'NATIVE_UNICODE_AND_LEADING_DOT_NAMES_INSTALL_REMOVE_OK'
 
   Add-Type -Path (Join-Path $PSScriptRoot 'native_ui_driver.cs')
@@ -176,5 +178,6 @@ try {
   Run-Wizard 'ui-cancel' 'cancel-welcome'
   Run-Wizard 'ui-cancel' 'cancel-progress'
   Run-Wizard 'ui-error' 'error'
+  if ($iceFailures.Count -ne 0) { throw ($iceFailures -join '; ') }
   Write-Host 'GO_MSI_AUTHORING_NATIVE_REGRESSIONS_OK'
 } finally { Stop-Transcript }

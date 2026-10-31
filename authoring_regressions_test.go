@@ -304,3 +304,66 @@ func TestPackageCodeCoversExternalCabinetPayload(t *testing.T) {
 	assert.NotEqual(t, cabA, cabB)
 	assert.NotEqual(t, dbA.Summary().Revision(), dbB.Summary().Revision())
 }
+
+func TestMinimalUIStandardMessageAndTerminalDialogs(t *testing.T) {
+	_, db := authoredBytes(t, authoringPackage("base").WithMinimalUI())
+	for _, table := range []string{"InstallUISequence", "AdminUISequence"} {
+		rows, err := db.Table(table)
+		require.NoError(t, err)
+		seq := map[string]int16{}
+		for _, row := range rows {
+			seq[row["Action"].(string)] = row["Sequence"].(int16)
+		}
+		assert.Equal(t, int16(-1), seq["ExitDialog"], table)
+		assert.Equal(t, int16(-2), seq["UserExit"], table)
+		assert.Equal(t, int16(-3), seq["FatalError"], table)
+	}
+	rows, err := db.Table("Property")
+	require.NoError(t, err)
+	found := false
+	for _, row := range rows {
+		if row["Property"] == "ErrorDialog" {
+			assert.Equal(t, "ErrorDlg", row["Value"])
+			found = true
+		}
+	}
+	assert.True(t, found)
+	rows, err = db.Table("Dialog")
+	require.NoError(t, err)
+	for _, row := range rows {
+		if row["Dialog"] == "ErrorDlg" {
+			assert.NotZero(t, row["Attributes"].(int32)&int32(msi.DialogError))
+			assert.Equal(t, "ErrorText", row["Control_First"])
+		}
+		if row["Dialog"] == "FatalError" {
+			assert.Zero(t, row["Attributes"].(int32)&int32(msi.DialogError))
+		}
+	}
+	rows, err = db.Table("ControlEvent")
+	require.NoError(t, err)
+	responses := map[string]string{}
+	inUse := map[string]bool{}
+	for _, row := range rows {
+		if row["Dialog_"] == "ErrorDlg" {
+			assert.Equal(t, "EndDialog", row["Event"])
+			responses[row["Control_"].(string)] = row["Argument"].(string)
+		}
+		if row["Dialog_"] == "FilesInUse" {
+			assert.Equal(t, "EndDialog", row["Event"])
+			inUse[row["Argument"].(string)] = true
+		}
+	}
+	assert.Equal(t, map[string]string{"A": "ErrorAbort", "C": "ErrorCancel", "I": "ErrorIgnore", "N": "ErrorNo", "O": "ErrorOk", "R": "ErrorRetry", "Y": "ErrorYes"}, responses)
+	assert.Equal(t, map[string]bool{"Exit": true, "Ignore": true, "Retry": true}, inUse)
+	assert.Contains(t, db.Tables(), "ListBox")
+	rows, err = db.Table("Control")
+	require.NoError(t, err)
+	found = false
+	for _, row := range rows {
+		if row["Dialog_"] == "FilesInUse" && row["Type"] == "ListBox" {
+			assert.Equal(t, "FileInUseProcess", row["Property"])
+			found = true
+		}
+	}
+	assert.True(t, found)
+}

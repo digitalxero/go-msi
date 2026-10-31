@@ -19,7 +19,7 @@ func main() {
 	must(err)
 	must(os.MkdirAll(out, 0o755))
 	manifest := map[string]map[string]any{}
-	for i, kind := range []string{"repair-a", "repair-b", "aliases", "ui-success", "ui-cancel", "ui-error"} {
+	for i, kind := range []string{"repair-a", "repair-b", "aliases", "ui-success", "ui-cancel", "ui-error", "names"} {
 		code := fmt.Sprintf("{A6223300-4455-4666-8777-%012d}", i+1)
 		if kind == "repair-b" {
 			code = "{A6223300-4455-4666-8777-000000000001}"
@@ -46,6 +46,7 @@ func main() {
 			child := d.Subdirectory("LongDirectory", "ghijkl1long.txt")
 			add(child, "Child", "child.txt", "CHILD PAYLOAD")
 			add(d, "DirectoryLiteral", "ghijkl~1.txt", "DIRECTORY SIBLING")
+		case "names":
 			add(d, "Unicode", "résumé.txt", "UNICODE PAYLOAD")
 			add(d, "LeadingDot", ".config", "LEADING DOT PAYLOAD")
 		default:

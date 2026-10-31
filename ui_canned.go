@@ -113,7 +113,7 @@ func expandMinimalUI(p *msiPackage) {
 	fatal := dialogEntry{
 		hasSequence: true, sequence: -3,
 		id: "FatalError", hCentering: 50, vCentering: 50, width: 370, height: 270,
-		attributes:     int32(DialogVisible | DialogModal | DialogError),
+		attributes:     int32(DialogVisible | DialogModal),
 		title:          "[ProductName] Setup",
 		controlFirst:   "Finish",
 		controlDefault: "Finish",
@@ -141,7 +141,41 @@ func expandMinimalUI(p *msiPackage) {
 		},
 	}
 
-	p.dialogEntries = append(p.dialogEntries, welcome, progress, exit, fatal, userExit)
+	// Windows Installer owns message text and selects the visible response
+	// buttons on this special dialog. FatalError above is an ordinary terminal
+	// dialog, not an Error-style message box.
+	errorDialog := dialogEntry{
+		id: "ErrorDlg", hCentering: 50, vCentering: 50, width: 330, height: 160,
+		attributes: int32(DialogVisible | DialogModal | DialogError),
+		title:      "[ProductName]", controlFirst: "ErrorText",
+		controls: []controlEntry{cText("ErrorText", 15, 15, 300, 100, "")},
+	}
+	for _, button := range []struct{ id, caption, response string }{
+		{"A", "Abort", "ErrorAbort"}, {"C", "Cancel", "ErrorCancel"},
+		{"I", "Ignore", "ErrorIgnore"}, {"N", "No", "ErrorNo"},
+		{"O", "OK", "ErrorOk"}, {"R", "Retry", "ErrorRetry"}, {"Y", "Yes", "ErrorYes"},
+	} {
+		errorDialog.controls = append(errorDialog.controls,
+			cButton(button.id, 132, 130, 56, 17, button.caption).withEvent("EndDialog", button.response, "1"))
+	}
+	if _, ok := p.props["ErrorDialog"]; !ok {
+		p.props["ErrorDialog"] = "ErrorDlg"
+	}
+
+	filesInUse := dialogEntry{
+		id: "FilesInUse", hCentering: 50, vCentering: 50, width: 370, height: 270,
+		attributes: int32(DialogVisible | DialogModal), title: "[ProductName] Setup",
+		controlFirst: "Retry", controlDefault: "Retry", controlCancel: "Exit",
+		controls: []controlEntry{
+			cText("Title", 15, 15, 340, 30, "Close these applications before continuing setup."),
+			{id: "Applications", typ: string(ControlListBox), x: 15, y: 55, width: 340, height: 150,
+				attributes: int32(ControlVisible | ControlEnabled | ControlSunken), property: "FileInUseProcess"},
+			cButton("Exit", 152, 243, 64, 17, "Cancel").withEvent("EndDialog", "Exit", "1"),
+			cButton("Ignore", 224, 243, 64, 17, "Ignore").withEvent("EndDialog", "Ignore", "1"),
+			cButton("Retry", 296, 243, 64, 17, "Retry").withEvent("EndDialog", "Retry", "1"),
+		},
+	}
+	p.dialogEntries = append(p.dialogEntries, welcome, progress, exit, fatal, userExit, errorDialog, filesInUse)
 }
 
 // ----- compact control constructors used by the canned UI -----

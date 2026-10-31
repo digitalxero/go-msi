@@ -120,14 +120,14 @@ func TestCompileP6_MinimalUI(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, readDB.validate())
 
-	// The five canned dialogs.
+	// The seven canned dialogs, including the standard engine message dialogs.
 	dlgTbl, err := readDB.GetTable("Dialog")
 	require.NoError(t, err)
 	got := map[string]bool{}
 	for _, r := range dlgTbl.rows() {
 		got[r.values()[0].(string)] = true
 	}
-	for _, id := range []string{"WelcomeDlg", "ProgressDlg", "ExitDialog", "FatalError", "UserExit"} {
+	for _, id := range []string{"WelcomeDlg", "ProgressDlg", "ExitDialog", "FatalError", "UserExit", "ErrorDlg", "FilesInUse"} {
 		assert.True(t, got[id], "canned dialog %s present", id)
 	}
 
@@ -185,7 +185,7 @@ func TestCompileP6_DoubleWriteNoDuplication(t *testing.T) {
 	require.NoError(t, err)
 	dlgTbl, err := db2.GetTable("Dialog")
 	require.NoError(t, err)
-	assert.Len(t, dlgTbl.rows(), 5, "second WriteMSI must not duplicate canned dialogs")
+	assert.Len(t, dlgTbl.rows(), 7, "second WriteMSI must not duplicate canned dialogs")
 	upTbl, err := db2.GetTable("Upgrade")
 	require.NoError(t, err)
 	assert.Len(t, upTbl.rows(), 2, "second WriteMSI must not duplicate MajorUpgrade rows")
