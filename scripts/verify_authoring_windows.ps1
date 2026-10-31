@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'ice_reports.ps1')
 $fixture = Join-Path $env:COMPATIBILITY_OUTPUT 'authoring'
 New-Item -ItemType Directory -Force $fixture | Out-Null
 Start-Transcript -Path (Join-Path $fixture 'native-proof.log') -Force
@@ -157,7 +158,7 @@ function Test-UnicodeICEControls([string]$Package, [string]$Kind) {
   $positiveLog = Join-Path $fixture "$Kind-case-control-ice.log"
   & $env:UPB_MSIVAL2 $positive $env:UPB_DARICE_CUB -f -l $positiveLog
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $positiveLog)) { throw "$Kind case-control Darice failed" }
-  if (([string](Get-Content $positiveLog -Raw -Encoding Unicode)).Trim() -ne '') { throw "$Kind case-control Darice report is not clean" }
+  if (-not [string]::IsNullOrEmpty((Read-IceReport $positiveLog))) { throw "$Kind case-control Darice report is not clean" }
   $negative = Join-Path $fixture "$Kind-collision-control.msi"
   Copy-Item $positive $negative
   Edit-ControlNames $negative $true
@@ -183,7 +184,7 @@ try {
     & $env:UPB_MSIVAL2 $package $env:UPB_DARICE_CUB -f -l $iceLog
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $iceLog)) { $iceFailures += "$kind Darice failed (exit $LASTEXITCODE)" }
     if (Test-Path $iceLog) {
-      $report = ([string](Get-Content $iceLog -Raw -Encoding Unicode)).Trim()
+      $report = Read-IceReport $iceLog
       $knownCaseFailure = $kind -in @('names','names-unicode') -and $report -match '^ICE30\s+UNKNOWN\s+ICE Internal Error 23\. API Returned: 259\.$'
       if ($knownCaseFailure) {
         Invoke-Scenario "$kind-ICE30-native-controls" { Test-UnicodeICEControls $package $kind }

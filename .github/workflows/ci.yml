@@ -20,6 +20,9 @@ jobs:
       - name: Set compatibility output directory
         shell: pwsh
         run: '"COMPATIBILITY_OUTPUT=$env:RUNNER_TEMP/msi-compatibility" | Out-File $env:GITHUB_ENV -Append -Encoding utf8'
+      - name: Test empty and UTF-16 ICE reports
+        shell: pwsh
+        run: ./scripts/test_ice_reports.ps1
       - name: Test PE versions against native Windows resources
         env:
           GO_MSI_WINDOWS_INSTALL_TEST: "1"
