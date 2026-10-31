@@ -64,6 +64,7 @@ func main() {
 			add(d, "Unicode", "résumé.txt", "UNICODE PAYLOAD")
 			add(d, "LeadingDot", ".config", "LEADING DOT PAYLOAD")
 		default:
+			b.RootDirectory("TARGETDIR", "SourceDir").Subdirectory("SystemFolder", ".")
 			b.WithMinimalUI().WithLicenseText("Native UI regression license. Accept to install.")
 			add(d, "Payload", "payload.txt", kind)
 			// Keep progress visible and process real MSI messages during this interval.
@@ -88,6 +89,17 @@ func main() {
 		must(err)
 		dirs, err := db.Table("Directory")
 		must(err)
+		if len(kind) >= 3 && kind[:3] == "ui-" {
+			found := false
+			for _, row := range dirs {
+				if row["Directory"] == "SystemFolder" && row["Directory_Parent"] == "TARGETDIR" {
+					found = true
+				}
+			}
+			if !found {
+				panic("UI fixture custom action has no SystemFolder")
+			}
+		}
 		var shortcuts []msi.Row
 		if kind == "shortcuts" {
 			shortcuts, err = db.Table("Shortcut")

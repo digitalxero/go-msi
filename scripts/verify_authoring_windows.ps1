@@ -148,6 +148,27 @@ try {
     [void][Runtime.InteropServices.Marshal]::ReleaseComObject($controlDB)
     & $env:UPB_MSIVAL2 $control $env:UPB_DARICE_CUB -f -l (Join-Path $fixture 'names-codepage1252-ice.log')
     Write-Host "Native codepage control Darice exit: $LASTEXITCODE"
+    # A second native control isolates Unicode case comparison in ICE30.
+    # Preserve and test the original-cased authored package separately above.
+    $folded = Join-Path $fixture 'names-uppercase-control.msi'
+    Copy-Item (Join-Path $fixture 'names/package.msi') $folded
+    $foldDB = $installer.OpenDatabase($folded, 1)
+    $query = $foldDB.OpenView('SELECT `File`, `FileName` FROM `File`')
+    $query.Execute()
+    while ($row = $query.Fetch()) {
+      Write-Host "Native original filename: $($row.StringData(2))"
+      $update = $foldDB.OpenView('UPDATE `File` SET `FileName` = ? WHERE `File` = ?')
+      $updateRecord = $installer.CreateRecord(2)
+      $updateRecord.StringData(1) = $row.StringData(2).ToUpperInvariant()
+      $updateRecord.StringData(2) = $row.StringData(1)
+      $update.Execute($updateRecord)
+      $update.Close()
+    }
+    $query.Close()
+    $foldDB.Commit()
+    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($foldDB)
+    & $env:UPB_MSIVAL2 $folded $env:UPB_DARICE_CUB -f -l (Join-Path $fixture 'names-uppercase-control-ice.log')
+    Write-Host "Native uppercase control Darice exit: $LASTEXITCODE"
   }
 
   Add-Type -Path (Join-Path $PSScriptRoot 'native_ui_driver.cs')
