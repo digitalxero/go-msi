@@ -126,7 +126,9 @@ For only that exact SDK error in the two bounded accented-name fixtures, CI
 requires full Darice validation on a case-only native copy. A separate Go audit
 requires every other table value, all Summary metadata, root CLSID and non-table
 streams (including cabinet bytes) to remain identical. It also requires ICE30 to
-reject a deliberately introduced Unicode filename collision. The original MSI
+reject a deliberately introduced Unicode filename collision on an LFN system.
+Selection is independent of row order, and a separate audit requires the edited
+copy to contain the accented collision across distinct sibling components. The original MSI
 must independently install/read/remove every exact requested name. The copy is
 used only for validation: shipped/installed names are never uppercased. Different
 errors, affected fixtures, control/audit failures and native execution failures

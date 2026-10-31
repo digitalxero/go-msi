@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ice_reports.ps1')
+. (Join-Path $PSScriptRoot 'ice_unicode_controls.ps1')
 $fixture = Join-Path $env:COMPATIBILITY_OUTPUT 'authoring'
 New-Item -ItemType Directory -Force $fixture | Out-Null
 Start-Transcript -Path (Join-Path $fixture 'native-proof.log') -Force
@@ -136,10 +137,11 @@ function Edit-ControlNames([string]$Path, [bool]$Collision) {
   }
   $view.Close()
   [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
+  $collisionName = if ($Collision) { Select-UnicodeCollisionName $names } else { $null }
   foreach ($entry in $names) {
     $update = $database.OpenView('UPDATE `File` SET `FileName` = ? WHERE `File` = ?')
     $record = $installer.CreateRecord(2)
-    $record.StringData(1) = if ($Collision) { $names[0].Name } else { $entry.Name }
+    $record.StringData(1) = if ($Collision) { $collisionName } else { $entry.Name }
     $record.StringData(2) = $entry.File
     $update.Execute($record)
     $update.Close()
@@ -162,10 +164,13 @@ function Test-UnicodeICEControls([string]$Package, [string]$Kind) {
   $negative = Join-Path $fixture "$Kind-collision-control.msi"
   Copy-Item $positive $negative
   Edit-ControlNames $negative $true
+  go run ./internal/verifyicecontrol collision $positive $negative
+  if ($LASTEXITCODE -ne 0) { throw "$Kind edited-copy Unicode collision audit failed" }
   $negativeLog = Join-Path $fixture "$Kind-collision-control-ice.log"
   & $env:UPB_MSIVAL2 $negative $env:UPB_DARICE_CUB -f -l $negativeLog
   if ($LASTEXITCODE -eq 0 -or -not (Test-Path $negativeLog)) { throw "$Kind collision control was not rejected" }
-  if ((Get-Content $negativeLog -Raw -Encoding Unicode) -notmatch '(?im)^ICE30\s+ERROR\s') { throw "$Kind negative control did not detect the collision with ICE30" }
+  $negativeReport = Read-IceReport $negativeLog
+  Assert-UnicodeCollisionReport $negativeReport
   Write-Host "NATIVE_UNICODE_ICE30_CASE_CONTROL_AND_COLLISION_REJECTION_OK $Kind"
 }
 
