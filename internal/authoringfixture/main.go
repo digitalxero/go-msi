@@ -12,8 +12,8 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		panic("usage: authoringfixture <out>")
+	if len(os.Args) != 3 {
+		panic("usage: authoringfixture <out> <native-progress-dll>")
 	}
 	out, err := filepath.Abs(os.Args[1])
 	must(err)
@@ -67,9 +67,12 @@ func main() {
 			b.RootDirectory("TARGETDIR", "SourceDir").Subdirectory("SystemFolder", ".")
 			b.WithMinimalUI().WithLicenseText("Native UI regression license. Accept to install.")
 			add(d, "Payload", "payload.txt", kind)
-			// Keep progress visible and process real MSI messages during this interval.
-			// The condition also permits cancellation while the execute sequence runs.
-			b.CustomAction("VisibleProgress").EXEFromDirectory("SystemFolder", `"[SystemFolder]cmd.exe" /c ping -n 16 127.0.0.1 > nul`).
+			// Use a native MSI action that emits progress messages and honors
+			// IDCANCEL. A waiting external process does not pump installer UI.
+			source, err := msi.FileSourceFromPath(os.Args[2])
+			must(err)
+			b.Binary("NativeProgress", source)
+			b.CustomAction("VisibleProgress").DLLFromBinary("NativeProgress", "ObserveProgress").
 				ScheduleAfter(msi.InstallExecuteSequence, "InstallFiles", "NOT Installed")
 			if kind == "ui-error" {
 				b.CustomAction("ForcedFailure").ErrorMessage("Intentional native UI regression failure").ScheduleBefore(msi.InstallExecuteSequence, "InstallFinalize", "NOT Installed")

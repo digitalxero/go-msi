@@ -121,7 +121,9 @@ function Run-Wizard([string]$Kind, [string]$Mode) {
   }
 }
 try {
-  go run ./internal/authoringfixture $fixture
+  $nativeBuild = Join-Path $fixture 'native-progress'
+  & (Join-Path $PSScriptRoot 'build_native_progress.ps1') -OutputDirectory $nativeBuild
+  go run ./internal/authoringfixture $fixture (Join-Path $nativeBuild 'NativeProgress.dll')
   if ($LASTEXITCODE -ne 0) { throw 'Authoring fixture generator failed' }
   $manifest = Get-Content (Join-Path $fixture 'manifest.json') -Raw -Encoding utf8 | ConvertFrom-Json
   $iceFailures = @()
@@ -163,12 +165,17 @@ try {
       $updateRecord.StringData(2) = $row.StringData(1)
       $update.Execute($updateRecord)
       $update.Close()
+      [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($update)
+      [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($updateRecord)
+      [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($row)
     }
     $query.Close()
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($query)
     $foldDB.Commit()
-    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($foldDB)
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($foldDB)
     & $env:UPB_MSIVAL2 $folded $env:UPB_DARICE_CUB -f -l (Join-Path $fixture 'names-uppercase-control-ice.log')
     Write-Host "Native uppercase control Darice exit: $LASTEXITCODE"
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $fixture 'names-uppercase-control-ice.log'))) { throw 'Native uppercase control could not be validated' }
   }
 
   Add-Type -Path (Join-Path $PSScriptRoot 'native_ui_driver.cs')

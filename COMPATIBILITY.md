@@ -96,6 +96,10 @@ Case-only sibling duplicates and duplicate explicit aliases are errors. The `.`
 target sentinel shares its parent's namespace; standard Windows directory
 properties retain their independently resolved namespaces.
 
+Native CI builds a test-only x86 DLL with the hosted MSVC toolchain. It reports
+progress through `MsiProcessMessage` and honors cancellation; no external UI
+handler replaces the authored dialogs.
+
 Native CI (`scripts/verify_authoring_windows.ps1`) checks changed-payload recache
 and source repair with stable product/component identities; installs, reads and
 removes short-name payloads with `SHORTFILENAMES=1` authored for consistent

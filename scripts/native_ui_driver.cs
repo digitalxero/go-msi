@@ -16,6 +16,11 @@ public static class NativeMsiUI {
     [DllImport("user32.dll")] static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint from, uint to, bool attach);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] static extern IntPtr SetActiveWindow(IntPtr window);
     public struct Rect { public int Left, Top, Right, Bottom; }
     public static string Text(IntPtr w) { var s = new StringBuilder(8192); GetWindowText(w,s,s.Capacity); return s.ToString(); }
     public static string Class(IntPtr w) { var s = new StringBuilder(256); GetClassName(w,s,s.Capacity); return s.ToString(); }
@@ -36,8 +41,18 @@ public static class NativeMsiUI {
     }
     public static bool Click(IntPtr w, string caption) {
         foreach(var c in Children(w)) {
-            if(Class(c) == "Button" && Text(c).Replace("&", "") == caption && IsWindowEnabled(c))
-                return PostMessage(c,0x00F5,IntPtr.Zero,IntPtr.Zero); // BM_CLICK
+            if(Class(c) == "Button" && Text(c).Replace("&", "") == caption && IsWindowEnabled(c)) {
+                // BM_CLICK can be ignored when a modeless dialog is inactive.
+                // Attach only while activating this job's installer window.
+                uint pid;
+                uint target = GetWindowThreadProcessId(w, out pid), current = GetCurrentThreadId();
+                bool attached = current != target && AttachThreadInput(current,target,true);
+                try {
+                    SetForegroundWindow(w);
+                    SetActiveWindow(w);
+                    return PostMessage(c,0x00F5,IntPtr.Zero,IntPtr.Zero);
+                } finally { if(attached) AttachThreadInput(current,target,false); }
+            }
         }
         return false;
     }
