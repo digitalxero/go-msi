@@ -1,6 +1,7 @@
 package msi
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"io/fs"
@@ -725,29 +726,6 @@ func (p *msiPackage) WriteMSI(w io.Writer) error {
 		return fmt.Errorf("msi: compiling package: %w", err)
 	}
 
-	// PackageCode: exactly mirror the legacy derivation for flat-repro parity
-	// (P1G2-051): "package|"+ProductCode+"|"+Version + ("|"+FilePK for each
-	// in the order the File rows were emitted). This makes RevisionNumber
-	// (and thus Summary stream) byte-identical for equivalent models. We
-	// inspect the File table post-compile (rows are in emission order).
-	//
-	// This is computed BEFORE validation so ICE39 (and any other summary rule)
-	// runs against the REAL package code rather than a placeholder.
-	pkgSeed := "package|" + p.productCode + "|" + p.version
-	if fileTbl, err := db.GetTable("File"); err == nil {
-		for _, r := range fileTbl.rows() {
-			if vals := r.values(); len(vals) > 0 {
-				if fid, ok := vals[0].(string); ok && fid != "" {
-					pkgSeed += "|" + fid
-				}
-			}
-		}
-	}
-	packageCode, err := msiGUIDv5(msiPackageNamespaceGUID, pkgSeed)
-	if err != nil {
-		packageCode = "{12345678-1234-1234-1234-123456789ABC}"
-	}
-
 	summary := msiSummaryInfo{
 		Codepage:       0,
 		Title:          "Installation Database",
@@ -755,7 +733,7 @@ func (p *msiPackage) WriteMSI(w io.Writer) error {
 		Author:         p.manufacturer,
 		Keywords:       "Installer",
 		Template:       msiTemplateString(p),
-		RevisionNumber: packageCode,
+		RevisionNumber: packageCodePlaceholder,
 		CreatingApp:    "go-msix",
 		CreateTime:     msiBuildTime,
 		SaveTime:       msiBuildTime,
@@ -776,28 +754,22 @@ func (p *msiPackage) WriteMSI(w io.Writer) error {
 		}
 	}
 
-	// P2: automatic ICE validation (validate-by-default). Only error-severity
-	// findings cause a failure. SkipValidation is the escape hatch (also
-	// exposed on the legacy MSIConfig path in a later wiring step).
-	if !p.skipValidation {
-		vb := NewValidator().WithAllICEs()
-		v, verr := vb.Build()
-		if verr != nil {
-			return fmt.Errorf("msi: building validator: %w", verr)
-		}
-		// Use the already-loaded db + the real summary (with the computed
-		// package code) for an efficient in-memory check (no extra serialize).
-		findings := v.(*msiValidator).validateInternal(db, summary)
-		for _, f := range findings {
-			if f.Severity() == SeverityError {
-				return fmt.Errorf("msi: ICE validation failed: %s", f.Error())
+	// Capture external cabinet content as it is written, alongside the embedded
+	// streams. No second callback invocation or payload-sized memory buffer.
+	var external []msiStream
+	externalWriter := p.externalCabWriter
+	if externalWriter != nil {
+		externalWriter = func(name string) (io.WriteCloser, error) {
+			w, err := p.externalCabWriter(name)
+			if err != nil {
+				return nil, err
 			}
+			return &packageExternalWriter{WriteCloser: w, digest: sha256.New(), name: name, receipts: &external}, nil
 		}
 	}
-
 	streams, err := serializeMSIStreams(db, summary, cabBuildOptions{
 		folderThreshold: p.cabFolderThreshold,
-		externalWriter:  p.externalCabWriter,
+		externalWriter:  externalWriter,
 		spanCap:         p.cabSpanCap,
 	})
 	if err != nil {
@@ -812,23 +784,39 @@ func (p *msiPackage) WriteMSI(w io.Writer) error {
 		return err
 	}
 
-	// P8: Authenticode signing (opt-in). Appends the \x05DigitalSignature stream
-	// computed over the imprint of the streams above + any embedded sub-storages
-	// + the (recursive) CLSIDs. The signature stream is excluded from the imprint,
-	// so an unsigned build stays byte-identical.
-	if p.signer != nil {
-		// The imprint hash and the CFB write each consume every streamed cabinet
-		// once; materialize those to per-cabinet temps first so a signed build
-		// compresses each cabinet only once (re-reading the temp twice) instead
-		// of recompressing it for both passes. Unsigned builds skip this and
-		// stream each cabinet straight through (single pass).
-		var cleanup func()
-		streams, cleanup, err = realizeStreamedCabStreams(streams)
-		if err != nil {
-			return fmt.Errorf("msi: staging cabinets for signing: %w", err)
+	// Stage embedded cabinets once so PackageCode, signing and CFB emission all
+	// consume the same compressed bytes without re-opening mutable sources.
+	streams, cleanup, err := realizeStreamedCabStreams(streams)
+	if err != nil {
+		return fmt.Errorf("msi: staging cabinets: %w", err)
+	}
+	defer cleanup()
+	summary.RevisionNumber, err = packageContentCode(streams, subStorages, external)
+	if err != nil {
+		return err
+	}
+	for i := range streams {
+		if streams[i].name == msiSummaryStreamName {
+			streams[i].data, err = buildMSISummaryStream(summary)
+			if err != nil {
+				return err
+			}
 		}
-		defer cleanup()
+	}
 
+	// Validate the actual final summary, not the self-reference placeholder.
+	if !p.skipValidation {
+		v, err := NewValidator().WithAllICEs().Build()
+		if err != nil {
+			return fmt.Errorf("msi: building validator: %w", err)
+		}
+		for _, f := range v.(*msiValidator).validateInternal(db, summary) {
+			if f.Severity() == SeverityError {
+				return fmt.Errorf("msi: ICE validation failed: %s", f.Error())
+			}
+		}
+	}
+	if p.signer != nil {
 		streams, err = msiSignStreams(streams, subStorages, p.signer)
 		if err != nil {
 			return fmt.Errorf("msi: signing: %w", err)

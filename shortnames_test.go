@@ -178,6 +178,7 @@ func TestMSIFileNameColumnRejectsInvalidNames(t *testing.T) {
 		"a|b.txt",
 		"tab\tname.txt",
 		"nul\x00name.txt",
+		"trailingdot.",
 	} {
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
 			n := newMSIShortNamer()
@@ -195,7 +196,6 @@ func TestMSIFileNameColumnNotShortNames(t *testing.T) {
 		"toolongbase.txt", // base > 8
 		"file.jsonx",      // ext > 3
 		"app+plus.txt",    // '+' not allowed in short names
-		"trailingdot.",    // trailing dot
 		"file=eq.txt",     // '=' not allowed in short names
 	} {
 		t.Run(name, func(t *testing.T) {

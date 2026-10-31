@@ -240,6 +240,55 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 		return n
 	}
 
+	// Dot directories share their parent's physical target namespace. Standard
+	// directory properties resolve independently (e.g. DesktopFolder).
+	var physicalDir func(string) string
+	physicalDir = func(id string) string {
+		e := p.dirEntries[id]
+		if e != nil && e.parent != "" && !msiStandardDirectories[id] {
+			target, _, _, _ := directoryNameParts(e.defaultDir)
+			if target == "." {
+				return physicalDir(e.parent)
+			}
+		}
+		return id
+	}
+	targetNamer := func(id string) *msiShortNamer { return namerFor("target:" + physicalDir(id)) }
+	sourceNamer := func(id string) *msiShortNamer { return namerFor("source:" + id) }
+	// Reserve every literal/explicit short name before any generated aliases.
+	// This includes files and child directories, regardless of emission order.
+	for id, e := range p.dirEntries {
+		if id == "TARGETDIR" {
+			continue
+		}
+		dd := cmp.Or(e.defaultDir, id)
+		target, source, hasSource, err := directoryNameParts(dd)
+		if err != nil {
+			return nil, err
+		}
+		if target != "." {
+			if err := targetNamer(e.parent).reserve(target); err != nil {
+				return nil, fmt.Errorf("msi compile: Directory %s DefaultDir %q: %w", id, dd, err)
+			}
+		}
+		if hasSource && source != "." {
+			if err := sourceNamer(e.parent).reserve(source); err != nil {
+				return nil, fmt.Errorf("msi compile: Directory %s source %q: %w", id, source, err)
+			}
+		}
+	}
+	for _, c := range p.compEntries {
+		for _, f := range c.files {
+			// File names are ordinary names, never short|long authoring syntax.
+			if err := msiValidateLongName(f.name); err != nil {
+				return nil, fmt.Errorf("msi compile: File %q: %w", f.name, err)
+			}
+			if err := targetNamer(c.dirID).reserve(f.name); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	var emitDir func(id string) error
 	emitDir = func(id string) error {
 		e := p.dirEntries[id]
@@ -253,18 +302,22 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			// (no short|long applied); only the product-derived install
 			// folder goes through the dir namer.
 			ddColumn = "SourceDir"
-		} else if dd == "." {
-			// Standard Windows Installer directories (ProgramMenuFolder,
-			// DesktopFolder, …) use the literal "." DefaultDir; it must not go
-			// through the 8.3 shortname generator.
-			ddColumn = "."
 		} else {
-			var err error
-			ddColumn, err = namerFor(e.parent).msiFileNameColumn(dd)
+			target, source, hasSource, err := directoryNameParts(dd)
+			if err != nil {
+				return fmt.Errorf("msi compile: Directory %s: %w", id, err)
+			}
+			ddColumn, err = targetNamer(e.parent).directoryPart(target)
+			if err == nil && hasSource {
+				var sourceColumn string
+				sourceColumn, err = sourceNamer(e.parent).directoryPart(source)
+				ddColumn += ":" + sourceColumn
+			}
 			if err != nil {
 				return fmt.Errorf("msi compile: Directory %s DefaultDir %q: %w", id, dd, err)
 			}
 		}
+
 		db.WithDirectory(id, e.parent, ddColumn)
 		for _, ch := range children[id] {
 			if err := emitDir(ch); err != nil {
@@ -393,7 +446,7 @@ func compileMSIPackage(p *msiPackage) (msiDatabase, error) {
 			// File.FileName column gets the short|long form from the *directory's*
 			// namer (not a global one). This matches how real MSIs and the
 			// legacy flat path (per-dir in tree model) behave.
-			fileNameColumn, err := namerFor(e.dirID).msiFileNameColumn(f.name)
+			fileNameColumn, err := targetNamer(e.dirID).msiFileNameColumn(f.name)
 			if err != nil {
 				return nil, fmt.Errorf("msi compile: File %s name %q: %w", fid, f.name, err)
 			}

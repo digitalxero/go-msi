@@ -4,10 +4,9 @@ package msi
 // wizard: welcome + license acceptance, progress, and the terminal
 // exit/error/cancel dialogs, with DefaultUIFont/TextStyle and stock UIText).
 //
-// HONESTY NOTE: this produces a STRUCTURALLY valid, ICE-clean, msiexec-loadable
-// UI. Actual on-screen rendering and exact wizard flow are verified manually on
-// Windows, not in CI (msitools cannot render dialogs). It is a "minimal
-// interactive UI", not a byte-for-byte reproduction of WiX's WixUI_Minimal.
+// Native Windows CI drives the real full-UI wizard through acceptance,
+// progress and success, plus cancellation and failure. This is a minimal
+// interactive UI, not a reproduction of WiX's WixUI_Minimal.
 
 // WithMinimalUI installs the canned minimal interactive wizard. The expansion
 // runs at compile time (so it sees the final product identity). Idempotent.
@@ -76,10 +75,11 @@ func expandMinimalUI(p *msiPackage) {
 		},
 	}
 
+	// Modeless progress returns control to the UI sequence so ExecuteAction runs.
 	// --- ProgressDlg: progress bar + status, shown during ExecuteAction ---
 	progress := dialogEntry{
 		id: "ProgressDlg", hCentering: 50, vCentering: 50, width: 370, height: 270,
-		attributes:     int32(DialogVisible | DialogModal | DialogTrackDiskSpace),
+		attributes:     int32(DialogVisible | DialogTrackDiskSpace),
 		title:          "[ProductName] Setup",
 		controlFirst:   "Cancel",
 		controlCancel:  "Cancel",
@@ -96,6 +96,7 @@ func expandMinimalUI(p *msiPackage) {
 
 	// --- Terminal dialogs (spawned by the engine on exit/error/cancel) ---
 	exit := dialogEntry{
+		hasSequence: true, sequence: -1,
 		id: "ExitDialog", hCentering: 50, vCentering: 50, width: 370, height: 270,
 		attributes:     int32(DialogVisible | DialogModal),
 		title:          "[ProductName] Setup",
@@ -110,6 +111,7 @@ func expandMinimalUI(p *msiPackage) {
 		},
 	}
 	fatal := dialogEntry{
+		hasSequence: true, sequence: -3,
 		id: "FatalError", hCentering: 50, vCentering: 50, width: 370, height: 270,
 		attributes:     int32(DialogVisible | DialogModal | DialogError),
 		title:          "[ProductName] Setup",
@@ -124,6 +126,7 @@ func expandMinimalUI(p *msiPackage) {
 		},
 	}
 	userExit := dialogEntry{
+		hasSequence: true, sequence: -2,
 		id: "UserExit", hCentering: 50, vCentering: 50, width: 370, height: 270,
 		attributes:     int32(DialogVisible | DialogModal),
 		title:          "[ProductName] Setup",

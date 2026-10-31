@@ -1,0 +1,180 @@
+$ErrorActionPreference = 'Stop'
+$fixture = Join-Path $env:COMPATIBILITY_OUTPUT 'authoring'
+New-Item -ItemType Directory -Force $fixture | Out-Null
+Start-Transcript -Path (Join-Path $fixture 'native-proof.log') -Force
+$installer = New-Object -ComObject WindowsInstaller.Installer
+function Run-MSI([string]$Arguments) {
+  $p = Start-Process msiexec.exe -ArgumentList $Arguments -Wait -PassThru
+  if ($p.ExitCode -ne 0) { throw "msiexec failed ($($p.ExitCode)): $Arguments" }
+}
+function Assert-Payload([string]$Path, [string]$Expected) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing payload: $Path" }
+  if ([IO.File]::ReadAllText($Path) -cne $Expected) { throw "Changed payload: $Path" }
+}
+function Assert-Unregistered([string]$Code) {
+  if ($installer.ProductState($Code) -ne -1) { throw "Product still registered: $Code" }
+}
+function Save-Dialog([IntPtr]$Window, [string]$Name) {
+  $contents = [NativeMsiUI]::Contents($Window)
+  $contents | Out-File (Join-Path $fixture "$Name.txt") -Encoding utf8
+  Write-Host "$Name`n$contents"
+  $r = [NativeMsiUI]::Bounds($Window)
+  $bitmap = [Drawing.Bitmap]::new($r.Right - $r.Left, $r.Bottom - $r.Top)
+  $graphics = [Drawing.Graphics]::FromImage($bitmap)
+  $dc = $graphics.GetHdc()
+  try {
+    if (-not [NativeMsiUI]::Capture($Window, $dc)) { throw 'PrintWindow failed' }
+  } finally { $graphics.ReleaseHdc($dc); $graphics.Dispose() }
+  try { $bitmap.Save((Join-Path $fixture "$Name.png"), [Drawing.Imaging.ImageFormat]::Png) } finally { $bitmap.Dispose() }
+}
+function Wait-Dialog([string]$Title, [string]$Content) {
+  $deadline = [datetime]::UtcNow.AddSeconds(60)
+  do {
+    $w = [NativeMsiUI]::Find($Title)
+    if ($w -ne [IntPtr]::Zero -and [NativeMsiUI]::Contents($w).Contains($Content)) { return $w }
+    Start-Sleep -Milliseconds 100
+  } while ([datetime]::UtcNow -lt $deadline)
+  if ($w -ne [IntPtr]::Zero) { Save-Dialog $w 'unexpected-dialog' }
+  throw "Native dialog did not reach: $Title / $Content"
+}
+function Click-Dialog([IntPtr]$Window, [string]$Caption) {
+  if (-not [NativeMsiUI]::Click($Window,$Caption)) { throw "Native button not enabled/found: $Caption" }
+  Start-Sleep -Milliseconds 300
+}
+function Run-Wizard([string]$Kind, [string]$Mode) {
+  $package = Join-Path $fixture "$Kind/package.msi"
+  $target = Join-Path $fixture "$Mode-install"
+  $title = "Go MSI $Kind Setup"
+  $log = Join-Path $fixture "$Mode-ui.log"
+  # /qf is the real authored full UI. /qn and MsiSetExternalUI are not used.
+  $p = Start-Process msiexec.exe -ArgumentList "/i `"$package`" /qf /norestart INSTALLFOLDER=`"$target`" /L*V `"$log`"" -PassThru
+  try {
+    $w = Wait-Dialog $title 'Native UI regression license'
+    Save-Dialog $w "$Mode-welcome"
+    if ($Mode -eq 'cancel-welcome') {
+      Click-Dialog $w 'Cancel'
+    } else {
+      # Before acceptance Install must not advance. Click it and prove the
+      # welcome screen remains, then accept and invoke the same control.
+      Click-Dialog $w 'Install'
+      $w = Wait-Dialog $title 'Native UI regression license'
+      Click-Dialog $w 'I accept the terms in the license agreement'
+      Click-Dialog $w 'Install'
+      $w = Wait-Dialog $title "Installing Go MSI $Kind"
+      Save-Dialog $w "$Mode-progress"
+      if ($Mode -eq 'cancel-progress') { Click-Dialog $w 'Cancel' }
+    }
+    $terminal = switch ($Mode) {
+      'success' { "Completed the Go MSI $Kind Setup" }
+      'error' { "Go MSI $Kind Setup ended prematurely" }
+      default { "Go MSI $Kind Setup was interrupted" }
+    }
+    if ($Mode -eq 'error') {
+      # The authored type-19 action displays an engine error message first.
+      $messageTitle = "Go MSI $Kind"
+      $message = Wait-Dialog $messageTitle 'Intentional native UI regression failure'
+      Save-Dialog $message 'error-message'
+      Click-Dialog $message 'OK'
+    }
+    $w = Wait-Dialog $title $terminal
+    Save-Dialog $w "$Mode-terminal"
+    Click-Dialog $w 'Finish'
+    if (-not $p.WaitForExit(30000)) { throw 'Wizard failed to exit after Finish' }
+    $p.Refresh()
+    $expected = if ($Mode -eq 'success') { 0 } elseif ($Mode -eq 'error') { 1603 } else { 1602 }
+    if ($p.ExitCode -ne $expected) { throw "$Mode exit $($p.ExitCode), expected $expected" }
+    $text = Get-Content $log -Raw
+    if ($Mode -ne 'cancel-welcome' -and $text -notmatch 'Action start .*ExecuteAction') { throw 'ExecuteAction never ran' }
+    if ($Mode -eq 'success') {
+      Assert-Payload (Join-Path $target 'payload.txt') $Kind
+      Run-MSI "/x `"$package`" /qn /norestart /L*V `"$fixture\ui-remove.log`""
+    }
+    Assert-Unregistered $manifest.$Kind.code
+    if (Test-Path (Join-Path $target 'payload.txt')) { throw "$Mode left payload behind" }
+    Write-Host "NATIVE_FULL_UI_$($Mode.ToUpper().Replace('-','_'))_OK"
+  } finally {
+    if (-not $p.HasExited) {
+      # Close only this job's wizard. Keep failure logs and screenshots.
+      $w = [NativeMsiUI]::Find($title)
+      if ($w -ne [IntPtr]::Zero) { [void][NativeMsiUI]::Click($w,'Cancel'); [void][NativeMsiUI]::Click($w,'Finish') }
+      if (-not $p.WaitForExit(10000)) { $p.Kill() }
+    }
+    if ($installer.ProductState($manifest.$Kind.code) -ne -1) {
+      Start-Process msiexec.exe -Wait -ArgumentList "/x `"$package`" /qn /norestart" | Out-Null
+    }
+  }
+}
+try {
+  go run ./internal/authoringfixture $fixture
+  if ($LASTEXITCODE -ne 0) { throw 'Authoring fixture generator failed' }
+  $manifest = Get-Content (Join-Path $fixture 'manifest.json') -Raw -Encoding utf8 | ConvertFrom-Json
+  foreach ($kind in @('repair-a','repair-b','aliases','ui-success','ui-cancel','ui-error')) {
+    $package = Join-Path $fixture "$kind/package.msi"
+    $summary = $installer.SummaryInformation($package,0)
+    if ($summary.Property(9) -cne $manifest.$kind.packageCode) { throw "$kind PackageCode differs through native API" }
+    $iceLog = Join-Path $fixture "$kind-ice.log"
+    & $env:UPB_MSIVAL2 $package $env:UPB_DARICE_CUB -f -l $iceLog
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $iceLog)) { throw "$kind Darice failed" }
+    if ((Get-Content $iceLog -Raw) -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b)') { throw "$kind ICE errors" }
+  }
+
+  $a = Join-Path $fixture 'repair-a/package.msi'
+  $b = Join-Path $fixture 'repair-b/package.msi'
+  $code = $manifest.'repair-a'.code
+  $target = Join-Path $fixture 'repair-install'
+  if ($manifest.'repair-a'.packageCode -eq $manifest.'repair-b'.packageCode) { throw 'Changed payload kept PackageCode' }
+  try {
+    Run-MSI "/i `"$a`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$fixture\repair-a-install.log`""
+    Assert-Payload (Join-Path $target 'payload.txt') 'repair-a'
+    Run-MSI "/i `"$b`" /qn /norestart REINSTALL=ALL REINSTALLMODE=vomus INSTALLFOLDER=`"$target`" /L*V `"$fixture\repair-b-recache.log`""
+    Assert-Payload (Join-Path $target 'payload.txt') 'repair-b'
+    $cached = $installer.ProductInfo($code,'LocalPackage')
+    if ($installer.SummaryInformation($cached,0).Property(9) -cne $manifest.'repair-b'.packageCode) { throw 'Installer cache did not adopt new PackageCode' }
+    Remove-Item (Join-Path $target 'payload.txt')
+    Run-MSI "/fa $code /qn /norestart /L*V `"$fixture\repair-b-source.log`""
+    Assert-Payload (Join-Path $target 'payload.txt') 'repair-b'
+    Write-Host 'NATIVE_PACKAGECODE_RECACHE_SOURCE_REPAIR_OK'
+  } finally { Run-MSI "/x $code /qn /norestart /L*V `"$fixture\repair-remove.log`"" }
+  Assert-Unregistered $code
+  if (Test-Path (Join-Path $target 'payload.txt')) { throw 'Repair uninstall left payload' }
+
+  $package = Join-Path $fixture 'aliases/package.msi'
+  $target = Join-Path $fixture 'alias-install'
+  try {
+    Run-MSI "/i `"$package`" /qn /norestart SHORTFILENAMES=1 INSTALLFOLDER=`"$target`" /L*V `"$fixture\alias-install.log`""
+    # Read effective short names from the emitted tables; each distinct payload
+    # must survive in the shared file/directory namespace.
+    foreach ($row in $manifest.aliases.files) {
+      $name = $row.FileName.Split('|')[0]
+      $long = $row.FileName.Split('|')[-1]
+      $dir = $target
+      if ($row.Component_ -eq 'Child') {
+        $child = @($manifest.aliases.directories | Where-Object Directory -eq 'LongDirectory')[0].DefaultDir.Split('|')[0]
+        $dir = Join-Path $target $child
+      }
+      Assert-Payload (Join-Path $dir $name) $manifest.aliases.payloads.$long
+    }
+    Write-Host 'NATIVE_SHORTFILENAMES_DISTINCT_FILES_AND_DIRECTORIES_OK'
+  } finally { Run-MSI "/x `"$package`" /qn /norestart /L*V `"$fixture\alias-remove.log`"" }
+  Assert-Unregistered $manifest.aliases.code
+  if (Test-Path $target) {
+    if (@(Get-ChildItem $target -Recurse -File -Force).Count -ne 0) { throw 'Alias uninstall left files' }
+  }
+  # With long names enabled, preserve supported Unicode and leading-dot names.
+  try {
+    Run-MSI "/i `"$package`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$fixture\names-install.log`""
+    Assert-Payload (Join-Path $target 'résumé.txt') 'UNICODE PAYLOAD'
+    Assert-Payload (Join-Path $target '.config') 'LEADING DOT PAYLOAD'
+  } finally { Run-MSI "/x `"$package`" /qn /norestart" }
+  Assert-Unregistered $manifest.aliases.code
+  Write-Host 'NATIVE_UNICODE_AND_LEADING_DOT_NAMES_INSTALL_REMOVE_OK'
+
+  Add-Type -Path (Join-Path $PSScriptRoot 'native_ui_driver.cs')
+  Add-Type -AssemblyName System.Drawing
+  Write-Host "Native UI session $([Diagnostics.Process]::GetCurrentProcess().SessionId), user $env:USERNAME"
+  Run-Wizard 'ui-success' 'success'
+  Run-Wizard 'ui-cancel' 'cancel-welcome'
+  Run-Wizard 'ui-cancel' 'cancel-progress'
+  Run-Wizard 'ui-error' 'error'
+  Write-Host 'GO_MSI_AUTHORING_NATIVE_REGRESSIONS_OK'
+} finally { Stop-Transcript }
