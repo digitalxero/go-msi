@@ -401,7 +401,7 @@ var msiTableCatalog = []msiCatalogTableDef{
 		columns: []msiCatalogColumn{
 			{name: "Shortcut", position: 1, colType: msiColIdentifier, width: 72, key: true, category: "Identifier"},
 			{name: "Directory_", position: 2, colType: msiColIdentifier, width: 72, category: "Identifier", keyTable: "Directory", keyColumn: msiCatInt16(1)},
-			{name: "Name", position: 3, colType: msiColShortcut, width: 128, category: "Shortcut"},
+			{name: "Name", position: 3, colType: msiColFilename, width: 128, localizable: true, category: "Filename"},
 			{name: "Component_", position: 4, colType: msiColIdentifier, width: 72, category: "Identifier", keyTable: "Component", keyColumn: msiCatInt16(1)},
 			{name: "Target", position: 5, colType: msiColText, width: 255, nullable: true, category: "Text"},
 			{name: "Arguments", position: 6, colType: msiColText, width: 255, nullable: true, category: "Text"},

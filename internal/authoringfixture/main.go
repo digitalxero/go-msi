@@ -19,7 +19,7 @@ func main() {
 	must(err)
 	must(os.MkdirAll(out, 0o755))
 	manifest := map[string]map[string]any{}
-	for i, kind := range []string{"repair-a", "repair-b", "aliases", "ui-success", "ui-cancel", "ui-error", "names", "shortcuts"} {
+	for i, kind := range []string{"repair-a", "repair-b", "aliases", "ui-success", "ui-cancel", "ui-error", "names", "shortcuts", "names-unicode", "names-dot"} {
 		code := fmt.Sprintf("{A6223300-4455-4666-8777-%012d}", i+1)
 		if kind == "repair-b" {
 			code = "{A6223300-4455-4666-8777-000000000001}"
@@ -40,6 +40,7 @@ func main() {
 		case "repair-a", "repair-b":
 			add(d, "Payload", "payload.txt", kind)
 		case "aliases":
+			b.WithProperty("SHORTFILENAMES", "1")
 			add(d, "Long", "abcdef1long.txt", "LONG PAYLOAD")
 			add(d, "Literal", "abcdef~1.txt", "LITERAL PAYLOAD")
 			add(d, "Second", "abcdef2long.txt", "SECOND PAYLOAD")
@@ -47,11 +48,18 @@ func main() {
 			add(child, "Child", "child.txt", "CHILD PAYLOAD")
 			add(d, "DirectoryLiteral", "ghijkl~1.txt", "DIRECTORY SIBLING")
 		case "shortcuts":
+			b.WithProperty("SHORTFILENAMES", "1")
 			add(d, "LongLinkPayload", "abcdef1long.lnk", "PLAIN PAYLOAD WITH LINK EXTENSION")
 			add(d, "LiteralLinkPayload", "abcdef~1.lnk", "LITERAL PAYLOAD WITH LINK EXTENSION")
 			c := d.Component("LinkTarget").AssociateToFeature("Main")
 			c.WithFile("payload.txt", msi.FileSourceFromBytes([]byte("SHORTCUT TARGET")))
 			c.Shortcut("abcdef2long.lnk", "Main").Advertised("Main")
+		case "names-unicode":
+			add(d, "Unicode", "résumé.txt", "UNICODE PAYLOAD")
+			add(d, "ASCII", "other.txt", "ASCII PAYLOAD")
+		case "names-dot":
+			add(d, "LeadingDot", ".config", "LEADING DOT PAYLOAD")
+			add(d, "ASCII", "other.txt", "ASCII PAYLOAD")
 		case "names":
 			add(d, "Unicode", "résumé.txt", "UNICODE PAYLOAD")
 			add(d, "LeadingDot", ".config", "LEADING DOT PAYLOAD")

@@ -428,3 +428,19 @@ func TestModelessProgressSpawnsModalCancelConfirmation(t *testing.T) {
 	assert.True(t, progressCancel)
 	assert.Equal(t, map[string]string{"Yes": "Exit", "No": "Return"}, events)
 }
+
+func TestShortcutNameValidationUsesFilenameCategory(t *testing.T) {
+	b := authoringPackage("base")
+	b.Directory("INSTALLFOLDER").Component("Payload").Shortcut("abcdef2long.lnk", "Main").Advertised("Main")
+	_, db := authoredBytes(t, b)
+	rows, err := db.Table("_Validation")
+	require.NoError(t, err)
+	found := false
+	for _, row := range rows {
+		if row["Table"] == "Shortcut" && row["Column"] == "Name" {
+			assert.Equal(t, "Filename", row["Category"])
+			found = true
+		}
+	}
+	assert.True(t, found)
+}

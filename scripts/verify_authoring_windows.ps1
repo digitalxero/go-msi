@@ -3,6 +3,13 @@ $fixture = Join-Path $env:COMPATIBILITY_OUTPUT 'authoring'
 New-Item -ItemType Directory -Force $fixture | Out-Null
 Start-Transcript -Path (Join-Path $fixture 'native-proof.log') -Force
 $installer = New-Object -ComObject WindowsInstaller.Installer
+$scenarioFailures = [Collections.Generic.List[string]]::new()
+function Invoke-Scenario([string]$Name, [scriptblock]$Work) {
+  try { & $Work } catch {
+    $scenarioFailures.Add("$Name : $($_.Exception.Message)")
+    Write-Host "NATIVE_SCENARIO_FAILED $Name`n$($_ | Out-String)"
+  }
+}
 function Run-MSI([string]$Arguments) {
   $p = Start-Process msiexec.exe -ArgumentList $Arguments -Wait -PassThru
   if ($p.ExitCode -ne 0) { throw "msiexec failed ($($p.ExitCode)): $Arguments" }
@@ -118,7 +125,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Authoring fixture generator failed' }
   $manifest = Get-Content (Join-Path $fixture 'manifest.json') -Raw -Encoding utf8 | ConvertFrom-Json
   $iceFailures = @()
-  foreach ($kind in @('repair-a','repair-b','aliases','ui-success','ui-cancel','ui-error','names','shortcuts')) {
+  foreach ($kind in @('repair-a','repair-b','aliases','ui-success','ui-cancel','ui-error','names','shortcuts','names-unicode','names-dot')) {
     $package = Join-Path $fixture "$kind/package.msi"
     $summary = $installer.SummaryInformation($package,0)
     if ($summary.Property(9) -cne $manifest.$kind.packageCode) { throw "$kind PackageCode differs through native API" }
@@ -128,87 +135,114 @@ try {
     if ((Test-Path $iceLog) -and (Get-Content $iceLog -Raw -Encoding Unicode) -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b|ICE Internal Error)') { $iceFailures += "$kind ICE errors or incomplete validation" }
   }
 
-  $a = Join-Path $fixture 'repair-a/package.msi'
-  $b = Join-Path $fixture 'repair-b/package.msi'
-  $code = $manifest.'repair-a'.code
-  $target = Join-Path $fixture 'repair-install'
-  if ($manifest.'repair-a'.packageCode -eq $manifest.'repair-b'.packageCode) { throw 'Changed payload kept PackageCode' }
-  try {
-    Run-MSI "/i `"$a`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$fixture\repair-a-install.log`""
-    Assert-Payload (Join-Path $target 'payload.txt') 'repair-a'
-    Run-MSI "/i `"$b`" /qn /norestart REINSTALL=ALL REINSTALLMODE=vomus INSTALLFOLDER=`"$target`" /L*V `"$fixture\repair-b-recache.log`""
-    Assert-Payload (Join-Path $target 'payload.txt') 'repair-b'
-    $cached = $installer.ProductInfo($code,'LocalPackage')
-    if ($installer.SummaryInformation($cached,0).Property(9) -cne $manifest.'repair-b'.packageCode) { throw 'Installer cache did not adopt new PackageCode' }
-    Remove-Item (Join-Path $target 'payload.txt')
-    Run-MSI "/fa $code /qn /norestart /L*V `"$fixture\repair-b-source.log`""
-    Assert-Payload (Join-Path $target 'payload.txt') 'repair-b'
-    Write-Host 'NATIVE_PACKAGECODE_RECACHE_SOURCE_REPAIR_OK'
-  } finally { Run-MSI "/x $code /qn /norestart /L*V `"$fixture\repair-remove.log`"" }
-  Assert-Unregistered $code
-  if (Test-Path (Join-Path $target 'payload.txt')) { throw 'Repair uninstall left payload' }
-
-  $package = Join-Path $fixture 'aliases/package.msi'
-  $target = Join-Path $fixture 'alias-install'
-  try {
-    Run-MSI "/i `"$package`" /qn /norestart SHORTFILENAMES=1 INSTALLFOLDER=`"$target`" /L*V `"$fixture\alias-install.log`""
-    # Read effective short names from the emitted tables; each distinct payload
-    # must survive in the shared file/directory namespace.
-    foreach ($row in $manifest.aliases.files) {
-      $name = $row.FileName.Split('|')[0]
-      $long = $row.FileName.Split('|')[-1]
-      $dir = $target
-      if ($row.Component_ -eq 'Child') {
-        $child = @($manifest.aliases.directories | Where-Object Directory -eq 'LongDirectory')[0].DefaultDir.Split('|')[0]
-        $dir = Join-Path $target $child
-      }
-      Assert-Payload (Join-Path $dir $name) $manifest.aliases.payloads.$long
-    }
-    Write-Host 'NATIVE_SHORTFILENAMES_DISTINCT_FILES_AND_DIRECTORIES_OK'
-  } finally { Run-MSI "/x `"$package`" /qn /norestart /L*V `"$fixture\alias-remove.log`"" }
-  Assert-Unregistered $manifest.aliases.code
-  if (Test-Path $target) {
-    if (@(Get-ChildItem $target -Recurse -File -Force).Count -ne 0) { throw 'Alias uninstall left files' }
-  }
-  # With long names enabled, preserve supported Unicode and leading-dot names.
-  $package = Join-Path $fixture 'names/package.msi'
-  try {
-    Run-MSI "/i `"$package`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$fixture\names-install.log`""
-    Assert-Payload (Join-Path $target 'résumé.txt') 'UNICODE PAYLOAD'
-    Assert-Payload (Join-Path $target '.config') 'LEADING DOT PAYLOAD'
-  } finally { Run-MSI "/x `"$package`" /qn /norestart" }
-  Assert-Unregistered $manifest.names.code
-  Write-Host 'NATIVE_UNICODE_AND_LEADING_DOT_NAMES_INSTALL_REMOVE_OK'
-
-  $package = Join-Path $fixture 'shortcuts/package.msi'
-  $target = Join-Path $fixture 'shortcut-install'
-  try {
-    Run-MSI "/i `"$package`" /qn /norestart SHORTFILENAMES=1 INSTALLFOLDER=`"$target`" /L*V `"$fixture\shortcut-install.log`""
-    foreach ($row in $manifest.shortcuts.files) {
-      if ($row.Component_ -eq 'LinkTarget') { continue }
-      $name = $row.FileName.Split('|')[0]
-      $long = $row.FileName.Split('|')[-1]
-      Assert-Payload (Join-Path $target $name) $manifest.shortcuts.payloads.$long
-    }
-    $link = Join-Path $target $manifest.shortcuts.shortcuts[0].Name.Split('|')[0]
-    if (-not (Test-Path -LiteralPath $link)) { throw "Shortcut missing: $link" }
-    if ((Get-Item -LiteralPath $link).Length -lt 76) { throw 'Shortcut has no shell link header' }
-    $header = [IO.File]::ReadAllBytes($link)
-    if ([BitConverter]::ToUInt32($header,0) -ne 76) { throw 'Shortcut was replaced by a payload' }
-    Write-Host 'NATIVE_SHORT_FILENAMES_PAYLOAD_AND_SHORTCUT_COEXIST_OK'
-  } finally { Run-MSI "/x `"$package`" /qn /norestart /L*V `"$fixture\shortcut-remove.log`"" }
-  Assert-Unregistered $manifest.shortcuts.code
-  if (Test-Path $target) {
-    if (@(Get-ChildItem $target -Recurse -File -Force).Count -ne 0) { throw 'Shortcut uninstall left files' }
+  Invoke-Scenario 'codepage-control' {
+    # Diagnose the SDK's ICE30 failure against an equivalent, natively
+    # re-encoded copy. This never modifies the authored MSI or waives its gate.
+    $control = Join-Path $fixture 'names-codepage1252.msi'
+    Copy-Item (Join-Path $fixture 'names/package.msi') $control
+    $idt = Join-Path $fixture '_ForceCodepage.idt'
+    [IO.File]::WriteAllText($idt, "`r`n`r`n1252`t_ForceCodepage`r`n", [Text.Encoding]::ASCII)
+    $controlDB = $installer.OpenDatabase($control, 1)
+    $controlDB.Import($fixture, '_ForceCodepage.idt')
+    $controlDB.Commit()
+    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($controlDB)
+    & $env:UPB_MSIVAL2 $control $env:UPB_DARICE_CUB -f -l (Join-Path $fixture 'names-codepage1252-ice.log')
+    Write-Host "Native codepage control Darice exit: $LASTEXITCODE"
   }
 
   Add-Type -Path (Join-Path $PSScriptRoot 'native_ui_driver.cs')
   Add-Type -AssemblyName System.Drawing
   Write-Host "Native UI session $([Diagnostics.Process]::GetCurrentProcess().SessionId), user $env:USERNAME"
-  Run-Wizard 'ui-success' 'success'
-  Run-Wizard 'ui-cancel' 'cancel-welcome'
-  Run-Wizard 'ui-cancel' 'cancel-progress'
-  Run-Wizard 'ui-error' 'error'
-  if ($iceFailures.Count -ne 0) { throw ($iceFailures -join '; ') }
+  Invoke-Scenario 'ui-success' { Run-Wizard 'ui-success' 'success' }
+  Invoke-Scenario 'ui-cancel-welcome' { Run-Wizard 'ui-cancel' 'cancel-welcome' }
+  Invoke-Scenario 'ui-cancel-progress' { Run-Wizard 'ui-cancel' 'cancel-progress' }
+  Invoke-Scenario 'ui-error' { Run-Wizard 'ui-error' 'error' }
+
+  Invoke-Scenario 'repair' {
+    $a = Join-Path $fixture 'repair-a/package.msi'
+    $b = Join-Path $fixture 'repair-b/package.msi'
+    $code = $manifest.'repair-a'.code
+    $target = Join-Path $fixture 'repair-install'
+    if ($manifest.'repair-a'.packageCode -eq $manifest.'repair-b'.packageCode) { throw 'Changed payload kept PackageCode' }
+    try {
+      Run-MSI "/i `"$a`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$fixture\repair-a-install.log`""
+      Assert-Payload (Join-Path $target 'payload.txt') 'repair-a'
+      Run-MSI "/i `"$b`" /qn /norestart REINSTALL=ALL REINSTALLMODE=vomus INSTALLFOLDER=`"$target`" /L*V `"$fixture\repair-b-recache.log`""
+      Assert-Payload (Join-Path $target 'payload.txt') 'repair-b'
+      $cached = $installer.ProductInfo($code,'LocalPackage')
+      if ($installer.SummaryInformation($cached,0).Property(9) -cne $manifest.'repair-b'.packageCode) { throw 'Installer cache did not adopt new PackageCode' }
+      Remove-Item (Join-Path $target 'payload.txt')
+      Run-MSI "/fa $code /qn /norestart /L*V `"$fixture\repair-b-source.log`""
+      Assert-Payload (Join-Path $target 'payload.txt') 'repair-b'
+      Write-Host 'NATIVE_PACKAGECODE_RECACHE_SOURCE_REPAIR_OK'
+    } finally { Run-MSI "/x $code /qn /norestart /L*V `"$fixture\repair-remove.log`"" }
+    Assert-Unregistered $code
+    if (Test-Path (Join-Path $target 'payload.txt')) { throw 'Repair uninstall left payload' }
+  }
+
+  Invoke-Scenario 'aliases' {
+    $package = Join-Path $fixture 'aliases/package.msi'
+    $target = Join-Path $fixture 'alias-install'
+    try {
+      Run-MSI "/i `"$package`" /qn /norestart SHORTFILENAMES=1 INSTALLFOLDER=`"$target`" /L*V `"$fixture\alias-install.log`""
+      # Read effective short names from the emitted tables; each distinct payload
+      # must survive in the shared file/directory namespace.
+      foreach ($row in $manifest.aliases.files) {
+        $name = $row.FileName.Split('|')[0]
+        $long = $row.FileName.Split('|')[-1]
+        $dir = $target
+        if ($row.Component_ -eq 'Child') {
+          $child = @($manifest.aliases.directories | Where-Object Directory -eq 'LongDirectory')[0].DefaultDir.Split('|')[0]
+          $dir = Join-Path $target $child
+        }
+        Assert-Payload (Join-Path $dir $name) $manifest.aliases.payloads.$long
+      }
+      Write-Host 'NATIVE_SHORTFILENAMES_DISTINCT_FILES_AND_DIRECTORIES_OK'
+    } finally { Run-MSI "/x `"$package`" /qn /norestart SHORTFILENAMES=1 /L*V `"$fixture\alias-remove.log`"" }
+    Assert-Unregistered $manifest.aliases.code
+    if (Test-Path $target) {
+      if (@(Get-ChildItem $target -Recurse -File -Force).Count -ne 0) { throw "Alias uninstall left files: $(@(Get-ChildItem $target -Recurse -File -Force).FullName -join ' , ')" }
+    }
+  }
+
+  Invoke-Scenario 'names' {
+    # With long names enabled, preserve supported Unicode and leading-dot names.
+    $package = Join-Path $fixture 'names/package.msi'
+    $target = Join-Path $fixture 'names-install'
+    try {
+      Run-MSI "/i `"$package`" /qn /norestart INSTALLFOLDER=`"$target`" /L*V `"$fixture\names-install.log`""
+      Assert-Payload (Join-Path $target 'résumé.txt') 'UNICODE PAYLOAD'
+      Assert-Payload (Join-Path $target '.config') 'LEADING DOT PAYLOAD'
+    } finally { Run-MSI "/x `"$package`" /qn /norestart" }
+    Assert-Unregistered $manifest.names.code
+    Write-Host 'NATIVE_UNICODE_AND_LEADING_DOT_NAMES_INSTALL_REMOVE_OK'
+  }
+
+  Invoke-Scenario 'shortcuts' {
+    $package = Join-Path $fixture 'shortcuts/package.msi'
+    $target = Join-Path $fixture 'shortcut-install'
+    try {
+      Run-MSI "/i `"$package`" /qn /norestart SHORTFILENAMES=1 INSTALLFOLDER=`"$target`" /L*V `"$fixture\shortcut-install.log`""
+      foreach ($row in $manifest.shortcuts.files) {
+        if ($row.Component_ -eq 'LinkTarget') { continue }
+        $name = $row.FileName.Split('|')[0]
+        $long = $row.FileName.Split('|')[-1]
+        Assert-Payload (Join-Path $target $name) $manifest.shortcuts.payloads.$long
+      }
+      $link = Join-Path $target $manifest.shortcuts.shortcuts[0].Name.Split('|')[0]
+      if (-not (Test-Path -LiteralPath $link)) { throw "Shortcut missing: $link" }
+      if ((Get-Item -LiteralPath $link).Length -lt 76) { throw 'Shortcut has no shell link header' }
+      $header = [IO.File]::ReadAllBytes($link)
+      if ([BitConverter]::ToUInt32($header,0) -ne 76) { throw 'Shortcut was replaced by a payload' }
+      Write-Host 'NATIVE_SHORT_FILENAMES_PAYLOAD_AND_SHORTCUT_COEXIST_OK'
+    } finally { Run-MSI "/x `"$package`" /qn /norestart SHORTFILENAMES=1 /L*V `"$fixture\shortcut-remove.log`"" }
+    Assert-Unregistered $manifest.shortcuts.code
+    if (Test-Path $target) {
+      if (@(Get-ChildItem $target -Recurse -File -Force).Count -ne 0) { throw 'Shortcut uninstall left files' }
+    }
+  }
+
+  $allFailures = @($iceFailures) + $scenarioFailures.ToArray()
+  if ($allFailures.Count -ne 0) { throw ($allFailures -join '; ') }
   Write-Host 'GO_MSI_AUTHORING_NATIVE_REGRESSIONS_OK'
 } finally { Stop-Transcript }

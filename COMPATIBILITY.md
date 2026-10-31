@@ -98,7 +98,8 @@ properties retain their independently resolved namespaces.
 
 Native CI (`scripts/verify_authoring_windows.ps1`) checks changed-payload recache
 and source repair with stable product/component identities; installs, reads and
-removes short-name payloads with `SHORTFILENAMES=1`; preserves Unicode/leading-dot
+removes short-name payloads with `SHORTFILENAMES=1` authored for consistent
+install/maintenance behavior; preserves Unicode/leading-dot
 names with long names enabled; and drives real full-UI license acceptance,
 progress, success, welcome/progress cancellation, and error dialogs. Progress
 cancellation opens a modal confirmation: No continues installation and Yes exits. It retains
