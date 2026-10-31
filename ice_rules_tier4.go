@@ -84,7 +84,8 @@ func runICE17(ctx *iceContext) []Finding {
 				})
 			}
 		case string(ControlListBox):
-			if prop == "" || !listBoxProps[prop] {
+			// InstallValidate populates this standard list dynamically.
+			if prop == "" || (!listBoxProps[prop] && !(dlg == "FilesInUse" && prop == "FileInUseProcess")) {
 				findings = append(findings, &msiFinding{ice: "ICE17", sev: SeverityError, table: "Control", column: "Property", rowKeys: rowPKs(r), message: fmt.Sprintf("ListBox %s/%s has no ListBox entries for property %q", dlg, ctl, prop)})
 			}
 		case string(ControlComboBox):

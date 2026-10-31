@@ -4,10 +4,9 @@ package msi
 // wizard: welcome + license acceptance, progress, and the terminal
 // exit/error/cancel dialogs, with DefaultUIFont/TextStyle and stock UIText).
 //
-// HONESTY NOTE: this produces a STRUCTURALLY valid, ICE-clean, msiexec-loadable
-// UI. Actual on-screen rendering and exact wizard flow are verified manually on
-// Windows, not in CI (msitools cannot render dialogs). It is a "minimal
-// interactive UI", not a byte-for-byte reproduction of WiX's WixUI_Minimal.
+// Native Windows CI drives the real full-UI wizard through acceptance,
+// progress and success, plus cancellation and failure. This is a minimal
+// interactive UI, not a reproduction of WiX's WixUI_Minimal.
 
 // WithMinimalUI installs the canned minimal interactive wizard. The expansion
 // runs at compile time (so it sees the final product identity). Idempotent.
@@ -76,10 +75,11 @@ func expandMinimalUI(p *msiPackage) {
 		},
 	}
 
+	// Modeless progress returns control to the UI sequence so ExecuteAction runs.
 	// --- ProgressDlg: progress bar + status, shown during ExecuteAction ---
 	progress := dialogEntry{
 		id: "ProgressDlg", hCentering: 50, vCentering: 50, width: 370, height: 270,
-		attributes:     int32(DialogVisible | DialogModal | DialogTrackDiskSpace),
+		attributes:     int32(DialogVisible | DialogTrackDiskSpace),
 		title:          "[ProductName] Setup",
 		controlFirst:   "Cancel",
 		controlCancel:  "Cancel",
@@ -90,12 +90,26 @@ func expandMinimalUI(p *msiPackage) {
 			cText("StatusText", 35, 100, 320, 20, "").withMapping("ActionText", "Text"),
 			cProgress("ProgressBar", 35, 125, 300, 12).withMapping("SetProgress", "Progress"),
 			cButton("Cancel", 304, 243, 56, 17, "Cancel").
-				withEvent("EndDialog", "Exit", ""),
+				withEvent("SpawnDialog", "CancelDlg", "1"),
+		},
+	}
+
+	// A modeless dialog cannot end the wizard directly. Its Cancel control
+	// opens this modal confirmation; No returns to progress, Yes requests exit.
+	cancel := dialogEntry{
+		id: "CancelDlg", hCentering: 50, vCentering: 50, width: 270, height: 100,
+		attributes: int32(DialogVisible | DialogModal), title: "[ProductName] Setup",
+		controlFirst: "No", controlDefault: "No", controlCancel: "No",
+		controls: []controlEntry{
+			cText("Question", 15, 15, 240, 35, "Are you sure you want to cancel setup?"),
+			cButton("Yes", 134, 70, 56, 17, "Yes").withEvent("EndDialog", "Exit", "1"),
+			cButton("No", 198, 70, 56, 17, "No").withEvent("EndDialog", "Return", "1"),
 		},
 	}
 
 	// --- Terminal dialogs (spawned by the engine on exit/error/cancel) ---
 	exit := dialogEntry{
+		hasSequence: true, sequence: -1,
 		id: "ExitDialog", hCentering: 50, vCentering: 50, width: 370, height: 270,
 		attributes:     int32(DialogVisible | DialogModal),
 		title:          "[ProductName] Setup",
@@ -110,8 +124,9 @@ func expandMinimalUI(p *msiPackage) {
 		},
 	}
 	fatal := dialogEntry{
+		hasSequence: true, sequence: -3,
 		id: "FatalError", hCentering: 50, vCentering: 50, width: 370, height: 270,
-		attributes:     int32(DialogVisible | DialogModal | DialogError),
+		attributes:     int32(DialogVisible | DialogModal),
 		title:          "[ProductName] Setup",
 		controlFirst:   "Finish",
 		controlDefault: "Finish",
@@ -124,6 +139,7 @@ func expandMinimalUI(p *msiPackage) {
 		},
 	}
 	userExit := dialogEntry{
+		hasSequence: true, sequence: -2,
 		id: "UserExit", hCentering: 50, vCentering: 50, width: 370, height: 270,
 		attributes:     int32(DialogVisible | DialogModal),
 		title:          "[ProductName] Setup",
@@ -138,7 +154,41 @@ func expandMinimalUI(p *msiPackage) {
 		},
 	}
 
-	p.dialogEntries = append(p.dialogEntries, welcome, progress, exit, fatal, userExit)
+	// Windows Installer owns message text and selects the visible response
+	// buttons on this special dialog. FatalError above is an ordinary terminal
+	// dialog, not an Error-style message box.
+	errorDialog := dialogEntry{
+		id: "ErrorDlg", hCentering: 50, vCentering: 50, width: 330, height: 160,
+		attributes: int32(DialogVisible | DialogModal | DialogError),
+		title:      "[ProductName]", controlFirst: "ErrorText",
+		controls: []controlEntry{cText("ErrorText", 15, 15, 300, 100, "")},
+	}
+	for _, button := range []struct{ id, caption, response string }{
+		{"A", "Abort", "ErrorAbort"}, {"C", "Cancel", "ErrorCancel"},
+		{"I", "Ignore", "ErrorIgnore"}, {"N", "No", "ErrorNo"},
+		{"O", "OK", "ErrorOk"}, {"R", "Retry", "ErrorRetry"}, {"Y", "Yes", "ErrorYes"},
+	} {
+		errorDialog.controls = append(errorDialog.controls,
+			cButton(button.id, 132, 130, 56, 17, button.caption).withEvent("EndDialog", button.response, "1"))
+	}
+	if _, ok := p.props["ErrorDialog"]; !ok {
+		p.props["ErrorDialog"] = "ErrorDlg"
+	}
+
+	filesInUse := dialogEntry{
+		id: "FilesInUse", hCentering: 50, vCentering: 50, width: 370, height: 270,
+		attributes: int32(DialogVisible | DialogModal), title: "[ProductName] Setup",
+		controlFirst: "Retry", controlDefault: "Retry", controlCancel: "Exit",
+		controls: []controlEntry{
+			cText("Title", 15, 15, 340, 30, "Close these applications before continuing setup."),
+			{id: "Applications", typ: string(ControlListBox), x: 15, y: 55, width: 340, height: 150,
+				attributes: int32(ControlVisible | ControlEnabled | ControlSunken), property: "FileInUseProcess"},
+			cButton("Exit", 152, 243, 64, 17, "Cancel").withEvent("EndDialog", "Exit", "1"),
+			cButton("Ignore", 224, 243, 64, 17, "Ignore").withEvent("EndDialog", "Ignore", "1"),
+			cButton("Retry", 296, 243, 64, 17, "Retry").withEvent("EndDialog", "Retry", "1"),
+		},
+	}
+	p.dialogEntries = append(p.dialogEntries, welcome, progress, cancel, exit, fatal, userExit, errorDialog, filesInUse)
 }
 
 // ----- compact control constructors used by the canned UI -----

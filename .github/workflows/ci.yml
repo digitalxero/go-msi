@@ -6,6 +6,7 @@ on:
 
 jobs:
   windows-compatibility:
+    timeout-minutes: 25
     runs-on: windows-2022
     env:
       CI_PROJECT_DIR: ${{ github.workspace }}
@@ -19,6 +20,9 @@ jobs:
       - name: Set compatibility output directory
         shell: pwsh
         run: '"COMPATIBILITY_OUTPUT=$env:RUNNER_TEMP/msi-compatibility" | Out-File $env:GITHUB_ENV -Append -Encoding utf8'
+      - name: Test ICE report parsing and Unicode controls
+        shell: pwsh
+        run: ./scripts/test_ice_reports.ps1
       - name: Test PE versions against native Windows resources
         env:
           GO_MSI_WINDOWS_INSTALL_TEST: "1"
@@ -32,6 +36,9 @@ jobs:
       - name: Silent downgrade, non-admin install, and Unicode regressions
         shell: pwsh
         run: ./scripts/verify_regressions_windows.ps1
+      - name: PackageCode repair, short names, Windows names, and real full UI
+        shell: pwsh
+        run: ./scripts/verify_authoring_windows.ps1
       - uses: actions/upload-artifact@v4
         if: always()
         with:

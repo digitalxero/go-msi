@@ -64,3 +64,73 @@ AlwaysInstallElevated remains disabled. The child resolves its actual loaded
 profile from its token SID, avoiding the administrator's inherited environment.
 This setup does not grant elevation or administrator membership to that user.
 See [Microsoft DisableMSI policy](https://learn.microsoft.com/en-us/windows/win32/msi/disablemsi).
+
+## Package identity and Windows destination names
+
+`WriteMSI` derives PackageCode from a versioned SHA-256 manifest of the complete
+unsigned package: table and string-pool streams, summary metadata, embedded
+cabinets, Binary/Icon data and embedded language-transform storages. External
+cabinet names and content digests participate too. Each manifest entry frames its
+name, length and digest; entries sort by name. Revision uses a fixed valid GUID
+while hashing to avoid self-reference, then receives the derived uppercase GUID.
+ProductCode, UpgradeCode and component GUID derivation are unchanged.
+
+Summary create/save times use the existing fixed 2020-01-01 UTC build epoch and
+are included, as are the cabinet's reproducible metadata bytes. Source filesystem
+timestamps do not determine package identity. Authenticode certificates,
+signatures and signing-server timestamps are added **after** PackageCode and are
+excluded: signing or re-signing identical installer content retains PackageCode,
+though signed MSI bytes can differ. Identical unsigned reproducible inputs retain
+both PackageCode and MSI bytes. Embedded cabinets stage to temporary files once
+so identity, signing and output consume the same bytes with bounded memory.
+
+Ordinary file/directory names reject Windows device basenames (including names
+with extensions and COM/LPT superscript 1, 2 and 3 variants), trailing periods and
+trailing spaces. Names are rejected, never silently changed. Representable
+Unicode and leading-dot names remain supported. Directory `DefaultDir` accepts
+MSI `target[:source]` syntax, optional `short|long` pairs and the `.` sentinel;
+its ordinary name parts undergo the same checks. Literal and explicit short
+names are reserved before generated aliases across sibling files, directories
+and shortcuts.
+Case-only sibling duplicates and duplicate explicit aliases are errors. The `.`
+target sentinel shares its parent's namespace; standard Windows directory
+properties retain their independently resolved namespaces.
+
+Native CI builds a test-only x86 DLL with the hosted MSVC toolchain. It reports
+progress through `MsiProcessMessage` and honors cancellation; no external UI
+handler replaces the authored dialogs.
+
+Native CI (`scripts/verify_authoring_windows.ps1`) checks changed-payload recache
+and source repair with stable product/component identities; installs, reads and
+removes short-name payloads with `SHORTFILENAMES=1` authored for consistent
+install/maintenance behavior; preserves Unicode/leading-dot
+names with long names enabled; and drives real full-UI license acceptance,
+progress, success, welcome/progress cancellation, and error dialogs. Progress
+cancellation opens a modal confirmation: No continues installation and Yes exits. It retains
+native API assertions, full Darice ICE reports, dialog text/screenshots and MSI
+logs in `official-msi-compatibility`. The existing downgrade, ordinary-user SID,
+Unicode metadata, patch and signature gates continue to run. AllowDowngrades
+still only disables the newer-product block; removing newer products requires a
+separate authored Upgrade row.
+
+### SDK Unicode case comparison in ICE30
+
+The pinned SDK's ICE30 reports `ICE Internal Error 23. API Returned: 259` for
+lowercase accented FileName values such as `résumé.txt`. Native Installer reads,
+installs and removes that exact name correctly. A native API edit that only
+uppercases the FileName strings makes the full Darice run clean; forcing codepage
+1252 alone does not fix it. Preserved original/control receipts are in the
+`official-msi-compatibility` artifact.
+
+For only that exact SDK error in the two bounded accented-name fixtures, CI
+requires full Darice validation on a case-only native copy. A separate Go audit
+requires every other table value, all Summary metadata, root CLSID and non-table
+streams (including cabinet bytes) to remain identical. It also requires ICE30 to
+reject a deliberately introduced Unicode filename collision on an LFN system.
+Selection is independent of row order, and a separate audit requires the edited
+copy to contain the accented collision across distinct sibling components. The original MSI
+must independently install/read/remove every exact requested name. The copy is
+used only for validation: shipped/installed names are never uppercased. Different
+errors, affected fixtures, control/audit failures and native execution failures
+still fail the job. This records the raw SDK limitation without treating its
+internal error as a successful check or suppressing collision validation.

@@ -133,7 +133,26 @@ func validateCategory(cat string, val any, col msiCatalogColumn) error {
 				return err
 			}
 		}
-	case "Filename", "DefaultDir", "WildCardFilename":
+	case "DefaultDir":
+		if s, ok := val.(string); ok {
+			target, source, hasSource, err := directoryNameParts(s)
+			if err != nil {
+				return err
+			}
+			parts := []string{target}
+			if hasSource {
+				parts = append(parts, source)
+			}
+			for _, part := range parts {
+				if part == "." {
+					continue
+				}
+				if _, _, _, err := shortLongName(part); err != nil {
+					return fmt.Errorf("bad DefaultDir part %q: %w", part, err)
+				}
+			}
+		}
+	case "Filename", "WildCardFilename":
 		if s, ok := val.(string); ok {
 			// For DefaultDir/FileName, allow short|long or bare; basic check via cabinet-like or identifier
 			// Full shortname validation is in msi_shortnames, here basic format.

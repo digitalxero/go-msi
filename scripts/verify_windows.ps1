@@ -22,7 +22,7 @@ try {
   & $env:UPB_MSIVAL2 $msi $env:UPB_DARICE_CUB -f -l $iceLog
   if ($LASTEXITCODE -ne 0) { throw 'Full Microsoft Darice ICE validation failed' }
   if (-not (Test-Path $iceLog)) { throw 'ICE report missing' }
-  if ((Get-Content $iceLog -Raw) -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b)') { throw 'ICE errors; see report' }
+  if ((Get-Content $iceLog -Raw -Encoding Unicode) -match '(?im)(\bICE\d+\b[^\r\n]*\bError\b|\bError\b[^\r\n]*\bICE\d+\b|ICE Internal Error)') { throw 'ICE errors; see report' }
   $admin = Join-Path $work 'admin'
   Run-MSI "/a `"$msi`" /qn /norestart TARGETDIR=`"$admin`" /L*V `"$(Join-Path $logs 'admin.log')`""
   foreach ($name in @('compat.exe', 'message.txt')) {

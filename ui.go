@@ -457,6 +457,11 @@ func emitMSIUITables(p *msiPackage, db msiDatabaseBuilder) error {
 		}
 
 		for _, c := range d.controls {
+			// FileInUseProcess is populated by InstallValidate at runtime. Its
+			// required ListBox table is deliberately empty at authoring time.
+			if d.id == "FilesInUse" && c.typ == string(ControlListBox) && c.property == "FileInUseProcess" {
+				haveLB = true
+			}
 			crow := newMSIRowBuilder().WithColumns(ctlTbl.columns()...).WithValues(
 				d.id, c.id, c.typ, c.x, c.y, c.width, c.height, c.attributes,
 				c.property, c.text, c.controlNext, c.help,
@@ -536,6 +541,13 @@ func emitMSIUITables(p *msiPackage, db msiDatabaseBuilder) error {
 		}
 	}
 
+	if p.useMinimalUI {
+		// ICE20 requires terminal actions in both UI sequences. Administrative
+		// installation uses the same terminal dialogs as normal installation.
+		for _, terminal := range []msiSequenceRow{{"ExitDialog", -1}, {"UserExit", -2}, {"FatalError", -3}} {
+			db.WithSequenceAction(msiAdminUISeqTableName, terminal.action, nil, terminal.sequence)
+		}
+	}
 	db.WithTable(dlgTbl)
 	db.WithTable(ctlTbl)
 	if haveEv {

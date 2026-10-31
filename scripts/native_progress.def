@@ -1,0 +1,3 @@
+LIBRARY NativeProgress
+EXPORTS
+    ObserveProgress=_ObserveProgress@4

@@ -31,7 +31,9 @@ const msiLongNameInvalidChars = `\/:*?"<>|`
 // for concurrent use; MSI table emission is single-threaded and deterministic
 // by design.
 type msiShortNamer struct {
-	used map[string]struct{} // uppercase short names already issued
+	used      map[string]struct{} // uppercase short names reserved or issued
+	longNames map[string]bool
+	issued    map[string]bool
 }
 
 // newMSIShortNamer returns an msiShortNamer with an empty used-name set.
@@ -49,14 +51,18 @@ func (n *msiShortNamer) msiFileNameColumn(longName string) (string, error) {
 		return "", err
 	}
 	if msiIsValidShortName(longName) {
-		n.used[strings.ToUpper(longName)] = struct{}{}
+		if err := n.claim(longName, longName); err != nil {
+			return "", err
+		}
 		return longName, nil
 	}
 	short, err := n.generateShortName(longName)
 	if err != nil {
 		return "", err
 	}
-	n.used[short] = struct{}{}
+	if err := n.claim(longName, short); err != nil {
+		return "", err
+	}
 	return short + "|" + longName, nil
 }
 
@@ -123,6 +129,22 @@ func (n *msiShortNamer) isUsed(name string) bool {
 func msiValidateLongName(longName string) error {
 	if longName == "" || longName == "." || longName == ".." {
 		return fmt.Errorf("msi shortname: invalid file name %q", longName)
+	}
+	if strings.HasSuffix(longName, ".") || strings.HasSuffix(longName, " ") {
+		return fmt.Errorf("msi shortname: unsupported trailing period or space in file name %q", longName)
+	}
+	base, _, _ := strings.Cut(strings.ToUpper(longName), ".")
+	// Windows recognizes these device basenames even before an extension;
+	// ISO-8859-1 superscripts 1, 2 and 3 are also reserved COM/LPT digits.
+	base = strings.TrimRight(base, " ")
+	reserved := base == "CON" || base == "PRN" || base == "AUX" || base == "NUL"
+	for _, prefix := range []string{"COM", "LPT"} {
+		if suffix, ok := strings.CutPrefix(base, prefix); ok && strings.Contains("123456789¹²³", suffix) && len([]rune(suffix)) == 1 {
+			reserved = true
+		}
+	}
+	if reserved {
+		return fmt.Errorf("msi shortname: reserved Windows device name %q", longName)
 	}
 	for i := 0; i < len(longName); i++ {
 		c := longName[i]
