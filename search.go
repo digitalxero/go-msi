@@ -304,7 +304,10 @@ func nullInt32(p *int32) any {
 // emitMSISearchTables emits Signature, AppSearch and the locator tables for the
 // package's search model. Order is fixed for deterministic output.
 func emitMSISearchTables(p *msiPackage, db msiDatabaseBuilder) error {
-	if len(p.signatureEntries) > 0 {
+	// AppSearch requires the Signature schema even for non-file lookups. An
+	// absent row denotes a raw value/directory search; omitting the table makes
+	// Windows Installer fail its signature query with error 2228.
+	if len(p.appSearchEntries) > 0 || len(p.signatureEntries) > 0 {
 		// Sort by signature id for deterministic emission independent of which
 		// builder added the Signature row.
 		entries := append([]signatureEntry(nil), p.signatureEntries...)

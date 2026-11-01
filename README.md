@@ -289,6 +289,15 @@ content (64-bit components, the `*64Folder` directories, 64-bit script custom
 actions, or 64-bit registry searches) appears in a package whose `Template`
 declares a 32-bit platform.
 
+### AppSearch schema
+
+Registry, INI, component and directory searches always include the required
+`Signature` table. It is empty unless `MatchingFile` adds real file signatures;
+raw registry values keep their raw lookup semantics. Packages with no searches
+do not gain search tables. This follows Microsoft's
+[AppSearch contract](https://learn.microsoft.com/en-us/windows/win32/msi/appsearch-action)
+and [RegLocator semantics](https://learn.microsoft.com/en-us/windows/win32/msi/reglocator-table).
+
 ### Signing (Authenticode)
 
 ```go

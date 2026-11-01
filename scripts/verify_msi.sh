@@ -152,6 +152,16 @@ RUN sh -c 'msiextract -C p3out p3.msi >/dev/null'
 [ "$(wc -c < "$WORK/p3out/Go MSIX P3 App/MyLongLibraryName.dll")" = 70000 ] || fail "dll size mismatch across cabs"
 
 # ---------------------------------------------------------------------------
+# Raw registry AppSearch requires a valid empty Signature schema. Independent
+# libmsi must open/export it with all nine columns and no fabricated rows.
+echo "==> raw AppSearch empty Signature table"
+(cd "$ROOT" && go run ./internal/searchfixture "$WORK/rawsearch")
+RUN msiinfo export rawsearch/v1.msi Signature > "$WORK/rawsearch-signature.idt"
+[ "$(wc -l < "$WORK/rawsearch-signature.idt")" -eq 3 ] || fail "raw Signature table has rows or lacks its schema"
+grep -qP '^Signature\tFileName\tMinVersion\tMaxVersion\tMinSize\tMaxSize\tMinDate\tMaxDate\tLanguages\r?$' "$WORK/rawsearch-signature.idt" \
+    || fail "raw Signature table schema differs"
+
+# ---------------------------------------------------------------------------
 # P9 multi-language + embedded transform cross-check. genmsi-new sets the primary
 # language to en-US (1033) and embeds a German (1031) language transform, so the
 # Template lists both LCIDs and the package still dumps/extracts cleanly with the
