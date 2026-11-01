@@ -39,6 +39,9 @@ jobs:
       - name: PackageCode repair, short names, Windows names, and real full UI
         shell: pwsh
         run: ./scripts/verify_authoring_windows.ps1
+      - name: Raw AppSearch schema, saved directory upgrade, and override precedence
+        shell: pwsh
+        run: ./scripts/verify_search_windows.ps1
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -56,6 +56,16 @@ in the compatibility artifact.
 The reusable CI workflow also gates automatic main-branch tag/release creation,
 so the release job waits for these native checks.
 
+`scripts/verify_search_windows.ps1` authors raw registry AppSearch fixtures using
+the public API. Native SQL checks all nine Signature columns and requires zero
+rows, and both versions must pass the complete Darice suite. Real Windows
+Installer must install with no prior value, retrieve an existing raw value,
+upgrade a redirected v1 installation to v2 without repeating INSTALLFOLDER,
+honor an explicit override during upgrade, and uninstall using the recovered
+directory. Payload bytes, saved registry state, product registration and
+AppSearch/recovery sequencing before costing are checked. Logs and original
+MSIs are retained under `appsearch` in `official-msi-compatibility`.
+
 Windows Server blocks unmanaged non-elevated MSI installs by default. On the
 non-domain-joined disposable GitHub runner, the proof temporarily sets
 `DisableMSI=0` to allow ordinary per-user installation and restores the exact
