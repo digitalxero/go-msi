@@ -25,7 +25,8 @@ function Run-MSI([string]$Operation, [int]$Version, [string]$LogName, [string]$O
   if ($p.ExitCode -ne 0) { throw "$LogName failed: msiexec exit $($p.ExitCode); see $log" }
   $text = Get-Content $log -Raw
   if ($text -notmatch '(?m)^Action ended [^\r\n]*AppSearch\. Return value 1\.') { throw "$LogName did not complete AppSearch" }
-  if ($text -match 'Unknown table.*Signature|Note: 1: 2228') { throw "$LogName contains an unknown table error" }
+  # Installer probes optional tables too; 2228 alone is not a failed install.
+  if ($text -match 'Note:\s*1:\s*2228\b[^\r\n]*\b3:\s*Signature\s+4:') { throw "$LogName contains a missing Signature table error" }
   $appSearch = [regex]::Match($text, '(?m)^Action start [^\r\n]*: AppSearch\.').Index
   $costing = [regex]::Match($text, '(?m)^Action start [^\r\n]*: CostInitialize\.')
   if (-not $costing.Success -or $appSearch -ge $costing.Index) { throw "$LogName AppSearch did not precede costing" }
