@@ -300,6 +300,29 @@ pkg := msi.NewPackage(). /* … */ WithSigner(signer)
 // pkg.WriteMSI(out) emits a \x05DigitalSignature stream; msi.Verify(r) verifies it.
 ```
 
+`WriteMSI` wraps signature-creation and timestamping failures in
+`*msi.SigningError`. Classify these with `errors.As`, including through additional
+wrappers; no error-text matching is needed:
+
+```go
+err := pkg.WriteMSI(out)
+var signingErr *msi.SigningError
+if errors.As(err, &signingErr) {
+    // Handle a signature or timestamp failure.
+}
+if errors.Is(err, destinationErr) {
+    // The destination writer's original error remains discoverable.
+}
+```
+
+`SigningError.Unwrap()` returns the original cause, so `errors.Is` and
+`errors.As` still reach private-key, HTTP transport, response-reading and parsing
+errors. An unsuccessful timestamp HTTP status is also a `SigningError`.
+Payload reading, cabinet construction, serialization, imprint reading and final
+output-writer failures do not acquire this classification, even when a signer
+is attached. Signer `Build` errors are returned directly; handle those at the
+`Build` call. Successful signing and PackageCode derivation are unchanged.
+
 ### Transforms (MST) and patches (MSP)
 
 ```go

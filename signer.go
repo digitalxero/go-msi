@@ -8,6 +8,20 @@ import (
 	"time"
 )
 
+// SigningError reports a failure creating the Authenticode signature during
+// Package.WriteMSI, including timestamping. Use errors.As to distinguish it from
+// payload, serialization, and output errors. SignerBuilder.Build errors are
+// returned directly and are not wrapped in SigningError.
+type SigningError struct {
+	// Err is the original signature-creation or timestamping error.
+	Err error
+}
+
+func (e *SigningError) Error() string { return fmt.Sprintf("msi: signing failed: %v", e.Err) }
+
+// Unwrap returns the underlying signing or timestamping failure.
+func (e *SigningError) Unwrap() error { return e.Err }
+
 // signer.go — P8 public MSI signer (Builder-IS-Implementation). Produces the
 // \x05DigitalSignature stream for an MSI from a certificate + key, optionally
 // RFC3161-timestamped.
@@ -139,7 +153,7 @@ func msiSignStreams(streams []msiStream, subs []msiSubStorage, signer Signer) ([
 	}
 	sig, err := signer.(*msiSigner).signImprint(imprint)
 	if err != nil {
-		return nil, err
+		return nil, &SigningError{Err: err}
 	}
 	return append(streams, msiStream{name: msiSignatureStreamName, data: sig}), nil
 }
